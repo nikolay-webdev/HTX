@@ -1,0 +1,141 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from .models import BacktestResult, Candle, Position, StrategyConfig, Trade
+
+
+def percentile(values: list[float], fraction: float) -> float:
+    ordered = sorted(values)
+    if not ordered:
+        raise ValueError("Нельзя вычислить процентиль пустого списка")
+    position = (len(ordered) - 1) * fraction
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = position - lower
+    return ordered[lower] * (1 - weight) + ordered[upper] * weight
+
+
+@dataclass(frozen=True)
+class RangeSignal:
+    support: float
+    resistance: float
+    entry_ceiling: float
+    target: float
+
+
+def detect_range(window: list[Candle], config: StrategyConfig) -> RangeSignal | None:
+    support = percentile([c.low for c in window], 0.15)
+    resistance = percentile([c.high for c in window], 0.85)
+    if support <= 0 or resistance <= support:
+        return None
+    width = resistance - support
+    if width / support < config.min_range_pct:
+        return None
+
+    segment = max(2, len(window) // 4)
+    first = sum(c.close for c in window[:segment]) / segment
+    last = sum(c.close for c in window[-segment:]) / segment
+    if abs(last / first - 1) > config.max_slope_pct:
+        return None
+
+    tolerance = width * config.touch_tolerance
+    low_touches = sum(c.low <= support + tolerance for c in window)
+    high_touches = sum(c.high >= resistance - tolerance for c in window)
+    if low_touches < config.min_touches or high_touches < config.min_touches:
+        return None
+
+    return RangeSignal(
+        support=support,
+        resistance=resistance,
+        entry_ceiling=support + width * config.entry_zone,
+        target=support + width * config.exit_zone,
+    )
+
+
+def run_backtest(candles: list[Candle], config: StrategyConfig) -> BacktestResult:
+    if len(candles) <= config.lookback + 1:
+        raise ValueError(f"Нужно больше {config.lookback + 1} свечей")
+
+    trades: list[Trade] = []
+    position: Position | None = None
+    pending_signal: RangeSignal | None = None
+    cooldown_until = -1
+    realized = 0.0
+    exposure_seconds = 0
+    peak_equity = config.capital
+    max_drawdown = 0.0
+
+    previous_time = candles[0].timestamp
+    for index in range(config.lookback, len(candles)):
+        candle = candles[index]
+        interval = max(0, candle.timestamp - previous_time)
+        previous_time = candle.timestamp
+
+        if pending_signal is not None and position is None:
+            entry_price = candle.open * (1 + config.slippage_rate)
+            buy_fee = config.capital * config.fee_rate
+            quantity = (config.capital - buy_fee) / entry_price
+            minimum_target = entry_price * (
+                1 + config.fee_rate + config.min_net_profit_pct
+            ) / (1 - config.fee_rate)
+            target = max(pending_signal.target, minimum_target)
+            if target <= pending_signal.resistance:
+                position = Position(candle.timestamp, entry_price, quantity, buy_fee, target)
+            pending_signal = None
+
+        if position is not None:
+            exposure_seconds += interval
+            if candle.high >= position.target_price:
+                proceeds = position.quantity * position.target_price
+                sell_fee = proceeds * config.fee_rate
+                net = proceeds - sell_fee - config.capital
+                trades.append(Trade(
+                    entry_time=position.entry_time,
+                    exit_time=candle.timestamp,
+                    entry_price=position.entry_price,
+                    exit_price=position.target_price,
+                    quantity=position.quantity,
+                    buy_fee=position.buy_fee,
+                    sell_fee=sell_fee,
+                    net_profit=net,
+                ))
+                realized += net
+                position = None
+                cooldown_until = index + config.cooldown_candles
+
+        market_value = config.capital
+        if position is not None:
+            market_value = position.quantity * candle.close * (1 - config.fee_rate)
+        equity = realized + market_value
+        peak_equity = max(peak_equity, equity)
+        max_drawdown = max(max_drawdown, peak_equity - equity)
+
+        if position is not None or pending_signal is not None or index < cooldown_until:
+            continue
+
+        window = candles[index - config.lookback:index]
+        signal = detect_range(window, config)
+        previous = candles[index - 1]
+        reversal = candle.close > previous.close and candle.low >= previous.low
+        if signal and candle.close <= signal.entry_ceiling and reversal:
+            pending_signal = signal
+
+    last = candles[-1]
+    unrealized = 0.0
+    if position is not None:
+        liquidation_value = position.quantity * last.close * (1 - config.fee_rate)
+        unrealized = liquidation_value - config.capital
+
+    elapsed = candles[-1].timestamp - candles[0].timestamp
+    return BacktestResult(
+        trades=trades,
+        position=position,
+        realized_profit=realized,
+        unrealized_profit=unrealized,
+        total_profit=realized + unrealized,
+        max_drawdown=max_drawdown,
+        exposure_seconds=exposure_seconds,
+        elapsed_seconds=elapsed,
+        last_price=last.close,
+        position_age_seconds=(last.timestamp - position.entry_time) if position else 0,
+    )
