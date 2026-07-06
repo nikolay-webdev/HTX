@@ -37,6 +37,7 @@ class StrategyTests(unittest.TestCase):
         candles.extend([candle(i, 75.0, low=74.8, high=75.2) for i in range(82, 90)])
         config = StrategyConfig(
             lookback=40,
+            target_price_delta=1.0,
             min_range_pct=0.01,
             max_slope_pct=0.03,
             min_touches=1,

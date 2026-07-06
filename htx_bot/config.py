@@ -50,9 +50,10 @@ def load_live_config(env_file: str | Path = ".env") -> LiveConfig:
         raise ValueError("В .env не задан TELEGRAM_CHAT_ID")
 
     strategy = StrategyConfig(
-        capital=_float("CAPITAL", 500.0),
+        capital=_float("CAPITAL", 1800.0),
         fee_rate=_float("FEE_RATE", 0.002),
         slippage_rate=_float("SLIPPAGE_RATE", 0.0002),
+        target_price_delta=_float("TARGET_PRICE_DELTA", 10.0),
         lookback=_int("LOOKBACK", 120),
         min_range_pct=_float("MIN_RANGE_PCT", 0.012),
         max_slope_pct=_float("MAX_SLOPE_PCT", 0.004),
@@ -66,6 +67,8 @@ def load_live_config(env_file: str | Path = ".env") -> LiveConfig:
         raise ValueError("CAPITAL должен быть больше нуля")
     if not 0 <= strategy.fee_rate < 0.1:
         raise ValueError("FEE_RATE должен быть от 0 до 0.1")
+    if strategy.target_price_delta <= 0:
+        raise ValueError("TARGET_PRICE_DELTA должен быть больше нуля")
     if strategy.lookback < 20:
         raise ValueError("LOOKBACK должен быть не меньше 20")
     if not 0 < strategy.entry_zone < strategy.exit_zone < 1:
@@ -76,9 +79,9 @@ def load_live_config(env_file: str | Path = ".env") -> LiveConfig:
     return LiveConfig(
         telegram_token=token,
         telegram_chat_id=int(chat_id),
-        symbol=os.getenv("SYMBOL", "solusdt").lower(),
+        symbol=os.getenv("SYMBOL", "ethusdt").lower(),
         period=os.getenv("PERIOD", "1min"),
         poll_seconds=poll_seconds,
-        database_path=Path(os.getenv("DATABASE_PATH", "data/live_simulator.db")),
+        database_path=Path(os.getenv("DATABASE_PATH", "data/eth_live_simulator.db")),
         strategy=strategy,
     )

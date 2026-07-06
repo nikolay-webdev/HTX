@@ -18,6 +18,7 @@ def _config(args: argparse.Namespace) -> StrategyConfig:
         capital=args.capital,
         fee_rate=args.fee_rate,
         slippage_rate=args.slippage_rate,
+        target_price_delta=args.target_price_delta,
         lookback=args.lookback,
         min_range_pct=args.min_range_pct,
         max_slope_pct=args.max_slope_pct,
@@ -30,11 +31,11 @@ def _config(args: argparse.Namespace) -> StrategyConfig:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="HTX SOL/USDT range strategy simulator")
+    parser = argparse.ArgumentParser(description="ETH/USDT spot range strategy simulator")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     fetch = subparsers.add_parser("fetch", help="Загрузить последние свечи HTX в CSV")
-    fetch.add_argument("--symbol", default="solusdt")
+    fetch.add_argument("--symbol", default="ethusdt")
     fetch.add_argument("--period", default="1min")
     fetch.add_argument("--size", type=int, default=2000)
     fetch.add_argument("--output", required=True)
@@ -43,12 +44,13 @@ def build_parser() -> argparse.ArgumentParser:
     source = backtest.add_mutually_exclusive_group(required=True)
     source.add_argument("--input", help="CSV со свечами")
     source.add_argument("--fetch", action="store_true", help="Взять последние свечи с HTX")
-    backtest.add_argument("--symbol", default="solusdt")
+    backtest.add_argument("--symbol", default="ethusdt")
     backtest.add_argument("--period", default="1min")
     backtest.add_argument("--size", type=int, default=2000)
-    backtest.add_argument("--capital", type=float, default=500.0)
+    backtest.add_argument("--capital", type=float, default=1800.0)
     backtest.add_argument("--fee-rate", type=float, default=0.002)
     backtest.add_argument("--slippage-rate", type=float, default=0.0002)
+    backtest.add_argument("--target-price-delta", type=float, default=10.0)
     backtest.add_argument("--lookback", type=int, default=120)
     backtest.add_argument("--min-range-pct", type=float, default=0.012)
     backtest.add_argument("--max-slope-pct", type=float, default=0.004)

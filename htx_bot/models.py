@@ -20,9 +20,10 @@ class Candle:
 
 @dataclass(frozen=True)
 class StrategyConfig:
-    capital: float = 500.0
+    capital: float = 1800.0
     fee_rate: float = 0.002
     slippage_rate: float = 0.0002
+    target_price_delta: float = 10.0
     lookback: int = 120
     min_range_pct: float = 0.012
     max_slope_pct: float = 0.004

@@ -31,12 +31,21 @@ def _duration(seconds: int) -> str:
     return f"{hours}ч {minutes}м"
 
 
+def _base_asset(symbol: str) -> str:
+    value = symbol.upper()
+    for quote in ("USDT", "USDC", "USD", "BTC", "ETH"):
+        if value.endswith(quote) and len(value) > len(quote):
+            return value[:-len(quote)]
+    return value
+
+
 class LiveSimulator:
     def __init__(self, config: LiveConfig, storage: Storage, telegram: TelegramClient):
         self.config = config
         self.storage = storage
         self.telegram = telegram
         self.period_seconds = _period_seconds(config.period)
+        self.base_asset = _base_asset(config.symbol)
 
     def _send(self, text: str, kind: str = "telegram") -> None:
         self.telegram.send(text)
@@ -49,6 +58,8 @@ class LiveSimulator:
             f"Пара: {self.config.symbol.upper()}\n"
             f"Капитал: {self.config.strategy.capital:.2f} USDT\n"
             f"Таймфрейм: {self.config.period}\n"
+            f"Цель продажи: цена покупки + {self.config.strategy.target_price_delta:.2f} USDT\n"
+            f"Проверка рынка: каждые {self.config.poll_seconds:g} сек.\n"
             f"Комиссия: {self.config.strategy.fee_rate * 100:.3f}% за операцию\n"
             f"Статус: {'ПАУЗА' if paused else 'АНАЛИЗ'}\n\n"
             "Реальные ордера и HTX API-ключи не используются.\n"
@@ -82,7 +93,7 @@ class LiveSimulator:
         return (
             "📌 ВИРТУАЛЬНАЯ ПОЗИЦИЯ\n\n"
             f"Покупка: {position.entry_price:.4f} USDT\n"
-            f"Количество: {position.quantity:.6f} SOL\n"
+            f"Количество: {position.quantity:.6f} {self.base_asset}\n"
             f"Текущая цена: {price:.4f} USDT\n"
             f"Продажа: {position.target_price:.4f} USDT\n"
             f"Текущий P&L: {pnl:+.2f} USDT\n"
@@ -151,7 +162,8 @@ class LiveSimulator:
             f"Время: {_time(timestamp)}\n"
             f"Покупка: {position.entry_price:.4f} USDT\n"
             f"Продажа: {position.target_price:.4f} USDT\n"
-            f"Количество: {position.quantity:.6f} SOL\n"
+            f"Разница цены: +{position.target_price - position.entry_price:.2f} USDT\n"
+            f"Количество: {position.quantity:.6f} {self.base_asset}\n"
             f"Комиссия продажи: {sell_fee:.2f} USDT\n"
             f"Чистая прибыль: {net:+.2f} USDT\n"
             f"Накопленная прибыль: {stats['profit']:.2f} USDT\n"
@@ -200,6 +212,11 @@ class LiveSimulator:
         if not new_candles:
             position = self.storage.position()
             if position:
+                current = candles[-1]
+                entry_candle_ts = position.entry_time // self.period_seconds * self.period_seconds
+                if current.timestamp >= entry_candle_ts and current.high >= position.target_price:
+                    self._sell(position, now)
+                    return "sold"
                 self._check_drawdown(position, candles[-1].close, now)
             return "idle"
 
@@ -226,6 +243,15 @@ class LiveSimulator:
 
         position = self.storage.position()
         if position:
+            current = candles[-1]
+            entry_candle_ts = position.entry_time // self.period_seconds * self.period_seconds
+            if (
+                current.timestamp >= cutoff
+                and current.timestamp >= entry_candle_ts
+                and current.high >= position.target_price
+            ):
+                self._sell(position, now)
+                return "sold"
             self._check_drawdown(position, candles[-1].close, now)
             return "holding"
         if self.storage.get("paused", False):
@@ -249,10 +275,7 @@ class LiveSimulator:
         entry_price = fill_reference * (1 + self.config.strategy.slippage_rate)
         buy_fee = self.config.strategy.capital * self.config.strategy.fee_rate
         quantity = (self.config.strategy.capital - buy_fee) / entry_price
-        minimum_target = entry_price * (
-            1 + self.config.strategy.fee_rate + self.config.strategy.min_net_profit_pct
-        ) / (1 - self.config.strategy.fee_rate)
-        target = max(signal.target, minimum_target)
+        target = entry_price + self.config.strategy.target_price_delta
         if target > signal.resistance:
             return "target_outside_range"
 
@@ -270,10 +293,11 @@ class LiveSimulator:
             "🟢 ВИРТУАЛЬНАЯ ПОКУПКА\n\n"
             f"Время: {_time(position.entry_time)}\n"
             f"Цена: {entry_price:.4f} USDT\n"
-            f"Количество: {quantity:.6f} SOL\n"
+            f"Количество: {quantity:.6f} {self.base_asset}\n"
             f"Рабочий капитал: {self.config.strategy.capital:.2f} USDT\n"
             f"Комиссия покупки: {buy_fee:.2f} USDT\n\n"
-            f"Виртуальная продажа: {target:.4f} USDT\n"
+            f"Виртуальная продажа: {target:.4f} USDT (+{self.config.strategy.target_price_delta:.2f})\n"
+            f"Ожидаемая валовая прибыль от движения цены: {quantity * self.config.strategy.target_price_delta:.2f} USDT\n"
             f"Ожидаемая чистая прибыль: {expected_proceeds - self.config.strategy.capital:.2f} USDT\n"
             f"Диапазон: {signal.support:.4f}–{signal.resistance:.4f}",
             "buy",

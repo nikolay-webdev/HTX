@@ -1,7 +1,7 @@
 [project]
 name = "htx-range-simulator"
 version = "0.1.0"
-description = "Conservative SOL/USDT range-strategy simulator for HTX"
+description = "Conservative ETH/USDT fixed-step spot simulator"
 requires-python = ">=3.11"
 
 [tool.pytest.ini_options]

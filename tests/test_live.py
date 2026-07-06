@@ -8,7 +8,7 @@ from unittest.mock import patch
 from htx_bot.config import LiveConfig
 from htx_bot.live import LiveSimulator
 from htx_bot.models import Candle, StrategyConfig
-from htx_bot.storage import Storage
+from htx_bot.storage import Storage, StoredPosition
 from htx_bot.strategy import RangeSignal
 
 
@@ -40,9 +40,10 @@ class LiveSimulatorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         strategy = StrategyConfig(
-            capital=500,
+            capital=1800,
             fee_rate=0.002,
             slippage_rate=0,
+            target_price_delta=10,
             lookback=2,
             min_range_pct=0.01,
             max_slope_pct=1,
@@ -51,7 +52,7 @@ class LiveSimulatorTests(unittest.TestCase):
         self.config = LiveConfig(
             telegram_token="test",
             telegram_chat_id=123,
-            symbol="solusdt",
+            symbol="ethusdt",
             period="1min",
             poll_seconds=10,
             database_path=Path(self.temp.name) / "state.db",
@@ -80,15 +81,19 @@ class LiveSimulatorTests(unittest.TestCase):
         active = make_candle(4, 82)
         with patch(
             "htx_bot.live.detect_range",
-            return_value=RangeSignal(80, 90, 85, 87),
+            return_value=RangeSignal(80, 100, 85, 87),
         ):
             result = self.simulator.process_market(initial + [signal, active], active.timestamp + 30)
         self.assertEqual(result, "bought")
-        self.assertIsNotNone(self.storage.position())
+        position = self.storage.position()
+        self.assertIsNotNone(position)
+        assert position is not None
+        self.assertEqual(position.target_price, position.entry_price + 10)
         self.assertIn("ВИРТУАЛЬНАЯ ПОКУПКА", self.telegram.sent[-1])
+        self.assertIn("ETH", self.telegram.sent[-1])
 
-        sell = make_candle(5, 88, high=88)
-        current = make_candle(6, 88)
+        sell = make_candle(5, 93, high=93)
+        current = make_candle(6, 93)
         result = self.simulator.process_market(
             initial + [signal, active, sell, current], current.timestamp + 30
         )
@@ -96,6 +101,20 @@ class LiveSimulatorTests(unittest.TestCase):
         self.assertIsNone(self.storage.position())
         self.assertEqual(self.storage.stats()["count"], 1)
         self.assertIn("ВИРТУАЛЬНАЯ ПРОДАЖА", self.telegram.sent[-1])
+
+    def test_current_minute_high_triggers_fixed_target_without_waiting_for_close(self) -> None:
+        initial = [make_candle(0, 82), make_candle(1, 83), make_candle(2, 82)]
+        self.simulator.process_market(initial, initial[-1].timestamp + 60)
+        current = make_candle(3, 89, high=90.1)
+        self.storage.open_position(
+            StoredPosition(current.timestamp, 80.0, 1.0, 3.6, 90.0, 0.0)
+        )
+
+        result = self.simulator.process_market(initial + [current], current.timestamp + 30)
+
+        self.assertEqual(result, "sold")
+        self.assertIsNone(self.storage.position())
+        self.assertIn("Разница цены: +10.00 USDT", self.telegram.sent[-1])
 
     def test_only_authorized_chat_can_pause(self) -> None:
         self.telegram._updates = [
@@ -107,8 +126,6 @@ class LiveSimulatorTests(unittest.TestCase):
         self.assertEqual(len(self.telegram.sent), 1)
 
     def test_position_survives_database_reopen(self) -> None:
-        from htx_bot.storage import StoredPosition
-
         expected = StoredPosition(100, 80.0, 6.2, 1.0, 82.0, 0.0)
         self.storage.open_position(expected)
         self.storage.close()

@@ -75,10 +75,7 @@ def run_backtest(candles: list[Candle], config: StrategyConfig) -> BacktestResul
             entry_price = candle.open * (1 + config.slippage_rate)
             buy_fee = config.capital * config.fee_rate
             quantity = (config.capital - buy_fee) / entry_price
-            minimum_target = entry_price * (
-                1 + config.fee_rate + config.min_net_profit_pct
-            ) / (1 - config.fee_rate)
-            target = max(pending_signal.target, minimum_target)
+            target = entry_price + config.target_price_delta
             if target <= pending_signal.resistance:
                 position = Position(candle.timestamp, entry_price, quantity, buy_fee, target)
             pending_signal = None

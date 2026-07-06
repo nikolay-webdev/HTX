@@ -20,7 +20,7 @@ def _ssl_context() -> ssl.SSLContext:
     return ssl.create_default_context(cafile=str(system_bundle) if system_bundle.exists() else None)
 
 
-def fetch_htx_candles(symbol: str = "solusdt", period: str = "1min", size: int = 2000) -> list[Candle]:
+def fetch_htx_candles(symbol: str = "ethusdt", period: str = "1min", size: int = 2000) -> list[Candle]:
     if not 1 <= size <= 2000:
         raise ValueError("HTX size должен быть от 1 до 2000")
     query = urlencode({"symbol": symbol.lower(), "period": period, "size": size})
