@@ -58,7 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     backtest.add_argument("--exit-zone", type=float, default=0.65)
     backtest.add_argument("--min-touches", type=int, default=2)
     backtest.add_argument("--min-net-profit-pct", type=float, default=0.0035)
-    backtest.add_argument("--cooldown-candles", type=int, default=5)
+    backtest.add_argument("--cooldown-candles", type=int, default=0)
 
     live = subparsers.add_parser("live", help="Запустить постоянный dry-run с Telegram")
     live.add_argument("--env", default=".env", help="Путь к файлу настроек")

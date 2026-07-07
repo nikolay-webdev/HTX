@@ -3,13 +3,11 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from htx_bot.config import LiveConfig
 from htx_bot.live import LiveSimulator
 from htx_bot.models import Candle, StrategyConfig
 from htx_bot.storage import Storage, StoredPosition
-from htx_bot.strategy import RangeSignal
 
 
 class FakeTelegram:
@@ -79,11 +77,7 @@ class LiveSimulatorTests(unittest.TestCase):
 
         signal = make_candle(3, 82, low=81.2)
         active = make_candle(4, 82)
-        with patch(
-            "htx_bot.live.detect_range",
-            return_value=RangeSignal(80, 100, 85, 87),
-        ):
-            result = self.simulator.process_market(initial + [signal, active], active.timestamp + 30)
+        result = self.simulator.process_market(initial + [signal, active], active.timestamp + 30)
         self.assertEqual(result, "bought")
         position = self.storage.position()
         self.assertIsNotNone(position)
@@ -97,7 +91,7 @@ class LiveSimulatorTests(unittest.TestCase):
         result = self.simulator.process_market(
             initial + [signal, active, sell, current], current.timestamp + 30
         )
-        self.assertIn(result, {"cooldown", "analysis"})
+        self.assertEqual(result, "sold")
         self.assertIsNone(self.storage.position())
         self.assertEqual(self.storage.stats()["count"], 1)
         self.assertIn("ВИРТУАЛЬНАЯ ПРОДАЖА", self.telegram.sent[-1])

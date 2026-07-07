@@ -32,7 +32,7 @@ class StrategyConfig:
     min_touches: int = 2
     touch_tolerance: float = 0.12
     min_net_profit_pct: float = 0.0035
-    cooldown_candles: int = 5
+    cooldown_candles: int = 0
 
 
 @dataclass

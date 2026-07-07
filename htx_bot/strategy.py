@@ -53,12 +53,12 @@ def detect_range(window: list[Candle], config: StrategyConfig) -> RangeSignal | 
 
 
 def run_backtest(candles: list[Candle], config: StrategyConfig) -> BacktestResult:
-    if len(candles) <= config.lookback + 1:
-        raise ValueError(f"Нужно больше {config.lookback + 1} свечей")
+    if len(candles) < 2:
+        raise ValueError("Нужно не меньше двух свечей")
+    candles = sorted(candles, key=lambda candle: candle.timestamp)
 
     trades: list[Trade] = []
     position: Position | None = None
-    pending_signal: RangeSignal | None = None
     cooldown_until = -1
     realized = 0.0
     exposure_seconds = 0
@@ -66,19 +66,16 @@ def run_backtest(candles: list[Candle], config: StrategyConfig) -> BacktestResul
     max_drawdown = 0.0
 
     previous_time = candles[0].timestamp
-    for index in range(config.lookback, len(candles)):
-        candle = candles[index]
+    for index, candle in enumerate(candles):
         interval = max(0, candle.timestamp - previous_time)
         previous_time = candle.timestamp
 
-        if pending_signal is not None and position is None:
+        if position is None and index >= cooldown_until:
             entry_price = candle.open * (1 + config.slippage_rate)
             buy_fee = config.capital * config.fee_rate
             quantity = (config.capital - buy_fee) / entry_price
             target = entry_price + config.target_price_delta
-            if target <= pending_signal.resistance:
-                position = Position(candle.timestamp, entry_price, quantity, buy_fee, target)
-            pending_signal = None
+            position = Position(candle.timestamp, entry_price, quantity, buy_fee, target)
 
         if position is not None:
             exposure_seconds += interval
@@ -106,16 +103,6 @@ def run_backtest(candles: list[Candle], config: StrategyConfig) -> BacktestResul
         equity = realized + market_value
         peak_equity = max(peak_equity, equity)
         max_drawdown = max(max_drawdown, peak_equity - equity)
-
-        if position is not None or pending_signal is not None or index < cooldown_until:
-            continue
-
-        window = candles[index - config.lookback:index]
-        signal = detect_range(window, config)
-        previous = candles[index - 1]
-        reversal = candle.close > previous.close and candle.low >= previous.low
-        if signal and candle.close <= signal.entry_ceiling and reversal:
-            pending_signal = signal
 
     last = candles[-1]
     unrealized = 0.0

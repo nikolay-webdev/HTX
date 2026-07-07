@@ -61,7 +61,7 @@ def load_live_config(env_file: str | Path = ".env") -> LiveConfig:
         exit_zone=_float("EXIT_ZONE", 0.65),
         min_touches=_int("MIN_TOUCHES", 2),
         min_net_profit_pct=_float("MIN_NET_PROFIT_PCT", 0.0035),
-        cooldown_candles=_int("COOLDOWN_CANDLES", 5),
+        cooldown_candles=_int("COOLDOWN_CANDLES", 0),
     )
     if strategy.capital <= 0:
         raise ValueError("CAPITAL должен быть больше нуля")
