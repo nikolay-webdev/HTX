@@ -148,6 +148,41 @@ class LiveSimulatorTests(unittest.TestCase):
         self.assertTrue(self.storage.get("paused"))
         self.assertEqual(len(self.telegram.sent), 1)
 
+    def test_status_includes_open_position_details(self) -> None:
+        self.storage.set("last_price", 1738.72)
+        self.storage.set("last_candle_ts", 1_700_000_000)
+        self.storage.open_position(
+            StoredPosition(1_700_000_000, 1805.581, 0.994915, 3.6, 1815.581, 0.0)
+        )
+
+        text = self.simulator.status_text()
+
+        self.assertIn("Состояние: УДЕРЖАНИЕ", text)
+        self.assertIn("Цена покупки: 1805.5810 USDT", text)
+        self.assertIn("Текущая цена: 1738.7200 USDT", text)
+        self.assertIn("Ожидаемая цена продажи: 1815.5810 USDT", text)
+        self.assertIn("Текущий P&L:", text)
+
+    def test_current_market_price_command(self) -> None:
+        self.storage.set("last_price", 1738.72)
+        self.storage.set("last_candle_ts", 1_700_000_000)
+        self.telegram._updates = [{
+            "update_id": 3,
+            "message": {"chat": {"id": 123}, "text": "/current_market_price"},
+        }]
+
+        self.simulator.handle_commands()
+
+        self.assertIn("ТЕКУЩАЯ РЫНОЧНАЯ ЦЕНА", self.telegram.sent[-1])
+        self.assertIn("Цена: 1738.7200 USDT", self.telegram.sent[-1])
+
+    def test_start_message_reports_restored_position_as_holding(self) -> None:
+        self.storage.open_position(
+            StoredPosition(1_700_000_000, 1805.581, 0.994915, 3.6, 1815.581, 0.0)
+        )
+
+        self.assertIn("Статус: УДЕРЖАНИЕ", self.simulator.start_message())
+
     def test_position_survives_database_reopen(self) -> None:
         expected = StoredPosition(100, 80.0, 6.2, 1.0, 82.0, 0.0)
         self.storage.open_position(expected)

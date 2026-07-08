@@ -53,6 +53,8 @@ class LiveSimulator:
 
     def start_message(self) -> str:
         paused = self.storage.get("paused", False)
+        position = self.storage.position()
+        state = "ПАУЗА" if paused else ("УДЕРЖАНИЕ" if position else "АНАЛИЗ")
         return (
             "🧪 HTX СИМУЛЯТОР ЗАПУЩЕН\n\n"
             f"Пара: {self.config.symbol.upper()}\n"
@@ -61,10 +63,10 @@ class LiveSimulator:
             f"Цель продажи: цена покупки + {self.config.strategy.target_price_delta:.2f} USDT\n"
             f"Проверка рынка: каждые {self.config.poll_seconds:g} сек.\n"
             f"Комиссия: {self.config.strategy.fee_rate * 100:.3f}% за операцию\n"
-            f"Статус: {'ПАУЗА' if paused else 'АНАЛИЗ'}\n\n"
+            f"Статус: {state}\n\n"
             "Цикл: найти диапазон → подтвердить отскок → купить → дождаться цели.\n"
             "Реальные ордера и HTX API-ключи не используются.\n"
-            "Команды: /status /position /stats /pause /resume /help"
+            "Команды: /status /position /current_market_price /stats /pause /resume /help"
         )
 
     def status_text(self) -> str:
@@ -73,7 +75,7 @@ class LiveSimulator:
         last_candle = int(self.storage.get("last_candle_ts", 0))
         position = self.storage.position()
         state = "ПАУЗА" if paused else ("УДЕРЖАНИЕ" if position else "АНАЛИЗ")
-        return (
+        text = (
             "📊 СТАТУС\n\n"
             f"Режим: SIMULATION\n"
             f"Состояние: {state}\n"
@@ -81,6 +83,30 @@ class LiveSimulator:
             f"Последняя цена: {last_price:.4f} USDT\n"
             f"Последняя закрытая свеча: {_time(last_candle) if last_candle else 'прогрев'}\n"
             f"Позиция: {'открыта' if position else 'нет'}"
+        )
+        if position is None:
+            return text
+        value = position.quantity * last_price * (1 - self.config.strategy.fee_rate)
+        pnl = value - self.config.strategy.capital
+        return (
+            text
+            + "\n\n📌 ОТКРЫТАЯ ПОЗИЦИЯ\n"
+            + f"Цена покупки: {position.entry_price:.4f} USDT\n"
+            + f"Текущая цена: {last_price:.4f} USDT\n"
+            + f"Ожидаемая цена продажи: {position.target_price:.4f} USDT\n"
+            + f"Осталось до цели: {position.target_price - last_price:+.4f} USDT\n"
+            + f"Текущий P&L: {pnl:+.2f} USDT\n"
+            + f"Удержание: {_duration(int(time.time()) - position.entry_time)}"
+        )
+
+    def current_market_price_text(self) -> str:
+        last_price = float(self.storage.get("last_price", 0.0))
+        last_candle = int(self.storage.get("last_candle_ts", 0))
+        return (
+            "💵 ТЕКУЩАЯ РЫНОЧНАЯ ЦЕНА\n\n"
+            f"Пара: {self.config.symbol.upper()}\n"
+            f"Цена: {last_price:.4f} USDT\n"
+            f"Последняя закрытая свеча: {_time(last_candle) if last_candle else 'прогрев'}"
         )
 
     def position_text(self, now: int | None = None) -> str:
@@ -129,6 +155,7 @@ class LiveSimulator:
                     "Команды симулятора:\n"
                     "/status — состояние и цена\n"
                     "/position — открытая позиция\n"
+                    "/current_market_price — текущая рыночная цена\n"
                     "/stats — результаты\n"
                     "/pause — запрет новых покупок\n"
                     "/resume — продолжить поиск входа\n\n"
@@ -138,6 +165,8 @@ class LiveSimulator:
                 response = self.status_text()
             elif command == "/position":
                 response = self.position_text()
+            elif command == "/current_market_price":
+                response = self.current_market_price_text()
             elif command == "/stats":
                 response = self.stats_text()
             elif command == "/pause":
