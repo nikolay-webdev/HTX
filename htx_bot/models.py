@@ -24,8 +24,8 @@ class StrategyConfig:
     fee_rate: float = 0.002
     slippage_rate: float = 0.0002
     target_price_delta: float = 10.0
-    lookback: int = 120
-    min_range_pct: float = 0.012
+    lookback: int = 90
+    min_range_pct: float = 0.008
     max_slope_pct: float = 0.004
     entry_zone: float = 0.30
     exit_zone: float = 0.65

@@ -23,6 +23,15 @@ class RangeSignal:
     target: float
 
 
+@dataclass(frozen=True)
+class EntrySetup:
+    support: float
+    resistance: float
+    entry_ceiling: float
+    entry_price: float
+    target_price: float
+
+
 def detect_range(window: list[Candle], config: StrategyConfig) -> RangeSignal | None:
     support = percentile([c.low for c in window], 0.15)
     resistance = percentile([c.high for c in window], 0.85)
@@ -52,6 +61,50 @@ def detect_range(window: list[Candle], config: StrategyConfig) -> RangeSignal | 
     )
 
 
+def minimum_profitable_target(entry_price: float, config: StrategyConfig) -> float:
+    """Return the exit price needed to cover fees and the configured net return."""
+    buy_fee = config.capital * config.fee_rate
+    quantity = (config.capital - buy_fee) / entry_price
+    required_proceeds = config.capital * (1 + config.min_net_profit_pct)
+    return required_proceeds / (quantity * (1 - config.fee_rate))
+
+
+def detect_entry_setup(
+    window: list[Candle],
+    next_open: float,
+    config: StrategyConfig,
+) -> EntrySetup | None:
+    """Find a confirmed lower-range entry without using the next candle's future data."""
+    if len(window) < config.lookback:
+        return None
+    analysis_window = window[-config.lookback:]
+    range_signal = detect_range(analysis_window, config)
+    if range_signal is None:
+        return None
+
+    signal = analysis_window[-1]
+    if signal.close <= signal.open:
+        return None
+    if signal.low > range_signal.entry_ceiling or signal.close > range_signal.entry_ceiling:
+        return None
+
+    entry_price = next_open * (1 + config.slippage_rate)
+    target_price = max(
+        entry_price + config.target_price_delta,
+        minimum_profitable_target(entry_price, config),
+    )
+    if target_price > range_signal.resistance:
+        return None
+
+    return EntrySetup(
+        support=range_signal.support,
+        resistance=range_signal.resistance,
+        entry_ceiling=range_signal.entry_ceiling,
+        entry_price=entry_price,
+        target_price=target_price,
+    )
+
+
 def run_backtest(candles: list[Candle], config: StrategyConfig) -> BacktestResult:
     if len(candles) < 2:
         raise ValueError("Нужно не меньше двух свечей")
@@ -71,11 +124,14 @@ def run_backtest(candles: list[Candle], config: StrategyConfig) -> BacktestResul
         previous_time = candle.timestamp
 
         if position is None and index >= cooldown_until:
-            entry_price = candle.open * (1 + config.slippage_rate)
-            buy_fee = config.capital * config.fee_rate
-            quantity = (config.capital - buy_fee) / entry_price
-            target = entry_price + config.target_price_delta
-            position = Position(candle.timestamp, entry_price, quantity, buy_fee, target)
+            window = candles[max(0, index - config.lookback):index]
+            setup = detect_entry_setup(window, candle.open, config)
+            if setup is not None:
+                entry_price = setup.entry_price
+                buy_fee = config.capital * config.fee_rate
+                quantity = (config.capital - buy_fee) / entry_price
+                target = setup.target_price
+                position = Position(candle.timestamp, entry_price, quantity, buy_fee, target)
 
         if position is not None:
             exposure_seconds += interval

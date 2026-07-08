@@ -7,6 +7,7 @@ from .config import LiveConfig
 from .data import fetch_htx_candles
 from .models import Candle
 from .storage import Storage, StoredPosition
+from .strategy import detect_entry_setup
 from .telegram import TelegramClient
 
 
@@ -61,7 +62,7 @@ class LiveSimulator:
             f"Проверка рынка: каждые {self.config.poll_seconds:g} сек.\n"
             f"Комиссия: {self.config.strategy.fee_rate * 100:.3f}% за операцию\n"
             f"Статус: {'ПАУЗА' if paused else 'АНАЛИЗ'}\n\n"
-            "Цикл: купить → ждать +10 USDT → продать → купить снова.\n"
+            "Цикл: найти диапазон → подтвердить отскок → купить → дождаться цели.\n"
             "Реальные ордера и HTX API-ключи не используются.\n"
             "Команды: /status /position /stats /pause /resume /help"
         )
@@ -267,10 +268,15 @@ class LiveSimulator:
         signal_candle = new_candles[-1]
         active = next((c for c in candles if c.timestamp > signal_candle.timestamp), None)
         fill_reference = active.open if active else signal_candle.close
-        entry_price = fill_reference * (1 + self.config.strategy.slippage_rate)
+        history = [candle for candle in closed if candle.timestamp <= signal_candle.timestamp]
+        setup = detect_entry_setup(history, fill_reference, self.config.strategy)
+        if setup is None:
+            return "analyzing"
+
+        entry_price = setup.entry_price
         buy_fee = self.config.strategy.capital * self.config.strategy.fee_rate
         quantity = (self.config.strategy.capital - buy_fee) / entry_price
-        target = entry_price + self.config.strategy.target_price_delta
+        target = setup.target_price
 
         position = StoredPosition(
             entry_time=active.timestamp if active else now,
@@ -289,9 +295,12 @@ class LiveSimulator:
             f"Количество: {quantity:.6f} {self.base_asset}\n"
             f"Рабочий капитал: {self.config.strategy.capital:.2f} USDT\n"
             f"Комиссия покупки: {buy_fee:.2f} USDT\n\n"
-            f"Виртуальная продажа: {target:.4f} USDT (+{self.config.strategy.target_price_delta:.2f})\n"
-            f"Ожидаемая валовая прибыль от движения цены: {quantity * self.config.strategy.target_price_delta:.2f} USDT\n"
+            f"Поддержка диапазона: {setup.support:.4f} USDT\n"
+            f"Сопротивление диапазона: {setup.resistance:.4f} USDT\n"
+            f"Виртуальная продажа: {target:.4f} USDT (+{target - entry_price:.2f})\n"
+            f"Ожидаемая валовая прибыль от движения цены: {quantity * (target - entry_price):.2f} USDT\n"
             f"Ожидаемая чистая прибыль: {expected_proceeds - self.config.strategy.capital:.2f} USDT\n\n"
+            "Вход подтверждён отскоком в нижней части торгового диапазона. "
             "Если цена снизится, позиция останется открытой до восстановления.",
             "buy",
         )

@@ -22,11 +22,18 @@ class FakeTelegram:
         return self._updates
 
 
-def make_candle(index: int, close: float, *, high: float | None = None, low: float | None = None) -> Candle:
+def make_candle(
+    index: int,
+    close: float,
+    *,
+    high: float | None = None,
+    low: float | None = None,
+    open_: float | None = None,
+) -> Candle:
     timestamp = 1_700_000_040 + index * 60
     return Candle(
         timestamp=timestamp,
-        open=close,
+        open=open_ if open_ is not None else close,
         high=high if high is not None else close + 0.1,
         low=low if low is not None else close - 0.1,
         close=close,
@@ -42,7 +49,7 @@ class LiveSimulatorTests(unittest.TestCase):
             fee_rate=0.002,
             slippage_rate=0,
             target_price_delta=10,
-            lookback=2,
+            lookback=3,
             min_range_pct=0.01,
             max_slope_pct=1,
             min_touches=1,
@@ -72,11 +79,15 @@ class LiveSimulatorTests(unittest.TestCase):
         self.assertEqual(self.telegram.sent, [])
 
     def test_virtual_buy_and_sell_are_persisted_and_notified(self) -> None:
-        initial = [make_candle(0, 82), make_candle(1, 81), make_candle(2, 81)]
+        initial = [
+            make_candle(0, 82),
+            make_candle(1, 80, high=100),
+            make_candle(2, 80),
+        ]
         self.simulator.process_market(initial, initial[-1].timestamp + 60)
 
-        signal = make_candle(3, 82, low=81.2)
-        active = make_candle(4, 82)
+        signal = make_candle(3, 81, low=79.8, open_=79)
+        active = make_candle(4, 81)
         result = self.simulator.process_market(initial + [signal, active], active.timestamp + 30)
         self.assertEqual(result, "bought")
         position = self.storage.position()
@@ -95,6 +106,24 @@ class LiveSimulatorTests(unittest.TestCase):
         self.assertIsNone(self.storage.position())
         self.assertEqual(self.storage.stats()["count"], 1)
         self.assertIn("ВИРТУАЛЬНАЯ ПРОДАЖА", self.telegram.sent[-1])
+
+    def test_live_waits_when_last_candle_does_not_confirm_rebound(self) -> None:
+        initial = [
+            make_candle(0, 82),
+            make_candle(1, 80, high=100),
+            make_candle(2, 80),
+        ]
+        self.simulator.process_market(initial, initial[-1].timestamp + 60)
+        red_signal = make_candle(3, 79, low=78.5, open_=81)
+        active = make_candle(4, 79)
+
+        result = self.simulator.process_market(
+            initial + [red_signal, active], active.timestamp + 30
+        )
+
+        self.assertEqual(result, "analyzing")
+        self.assertIsNone(self.storage.position())
+        self.assertEqual(self.telegram.sent, [])
 
     def test_current_minute_high_triggers_fixed_target_without_waiting_for_close(self) -> None:
         initial = [make_candle(0, 82), make_candle(1, 83), make_candle(2, 82)]
