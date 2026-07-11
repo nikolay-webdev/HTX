@@ -14,6 +14,9 @@ class StoredPosition:
     buy_fee: float
     target_price: float
     last_alert_level: float
+    max_price: float | None = None
+    min_price: float | None = None
+    id: int = 1
 
 
 class Storage:
@@ -34,7 +37,7 @@ class Storage:
                 value TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS position (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
+                id INTEGER PRIMARY KEY,
                 entry_time INTEGER NOT NULL,
                 entry_price REAL NOT NULL,
                 quantity REAL NOT NULL,
@@ -61,7 +64,47 @@ class Storage:
             );
             """
         )
+        self._migrate_single_position_table()
+        self._add_column("position", "max_price", "REAL")
+        self._add_column("position", "min_price", "REAL")
+        self._add_column("trades", "max_price", "REAL")
+        self._add_column("trades", "min_price", "REAL")
         self.connection.commit()
+
+    def _migrate_single_position_table(self) -> None:
+        row = self.connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'position'"
+        ).fetchone()
+        if row is None or "CHECK (id = 1)" not in row["sql"]:
+            return
+        self.connection.executescript(
+            """
+            ALTER TABLE position RENAME TO position_single_backup;
+            CREATE TABLE position (
+                id INTEGER PRIMARY KEY,
+                entry_time INTEGER NOT NULL,
+                entry_price REAL NOT NULL,
+                quantity REAL NOT NULL,
+                buy_fee REAL NOT NULL,
+                target_price REAL NOT NULL,
+                last_alert_level REAL NOT NULL DEFAULT 0
+            );
+            INSERT INTO position(
+                id, entry_time, entry_price, quantity, buy_fee, target_price, last_alert_level
+            )
+            SELECT id, entry_time, entry_price, quantity, buy_fee, target_price, last_alert_level
+            FROM position_single_backup;
+            DROP TABLE position_single_backup;
+            """
+        )
+
+    def _add_column(self, table: str, column: str, definition: str) -> None:
+        columns = {
+            row["name"]
+            for row in self.connection.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if column not in columns:
+            self.connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     def close(self) -> None:
         self.connection.close()
@@ -78,10 +121,7 @@ class Storage:
         )
         self.connection.commit()
 
-    def position(self) -> StoredPosition | None:
-        row = self.connection.execute("SELECT * FROM position WHERE id = 1").fetchone()
-        if row is None:
-            return None
+    def _position_from_row(self, row: sqlite3.Row) -> StoredPosition:
         return StoredPosition(
             entry_time=row["entry_time"],
             entry_price=row["entry_price"],
@@ -89,15 +129,28 @@ class Storage:
             buy_fee=row["buy_fee"],
             target_price=row["target_price"],
             last_alert_level=row["last_alert_level"],
+            max_price=row["max_price"] if row["max_price"] is not None else row["entry_price"],
+            min_price=row["min_price"] if row["min_price"] is not None else row["entry_price"],
+            id=row["id"],
         )
 
-    def open_position(self, position: StoredPosition) -> None:
+    def positions(self) -> list[StoredPosition]:
+        rows = self.connection.execute("SELECT * FROM position ORDER BY id").fetchall()
+        return [self._position_from_row(row) for row in rows]
+
+    def position(self) -> StoredPosition | None:
+        row = self.connection.execute("SELECT * FROM position ORDER BY id LIMIT 1").fetchone()
+        if row is None:
+            return None
+        return self._position_from_row(row)
+
+    def open_position(self, position: StoredPosition) -> StoredPosition:
         with self.connection:
-            existing = self.connection.execute("SELECT 1 FROM position WHERE id = 1").fetchone()
-            if existing:
-                raise RuntimeError("Позиция уже открыта")
-            self.connection.execute(
-                "INSERT INTO position VALUES(1, ?, ?, ?, ?, ?, ?)",
+            cursor = self.connection.execute(
+                """INSERT INTO position(
+                    entry_time, entry_price, quantity, buy_fee,
+                    target_price, last_alert_level, max_price, min_price
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     position.entry_time,
                     position.entry_price,
@@ -105,36 +158,89 @@ class Storage:
                     position.buy_fee,
                     position.target_price,
                     position.last_alert_level,
+                    position.max_price if position.max_price is not None else position.entry_price,
+                    position.min_price if position.min_price is not None else position.entry_price,
                 ),
             )
+            position_id = int(cursor.lastrowid)
+        return StoredPosition(
+            entry_time=position.entry_time,
+            entry_price=position.entry_price,
+            quantity=position.quantity,
+            buy_fee=position.buy_fee,
+            target_price=position.target_price,
+            last_alert_level=position.last_alert_level,
+            max_price=position.max_price if position.max_price is not None else position.entry_price,
+            min_price=position.min_price if position.min_price is not None else position.entry_price,
+            id=position_id,
+        )
 
-    def set_alert_level(self, level: float) -> None:
-        self.connection.execute("UPDATE position SET last_alert_level = ? WHERE id = 1", (level,))
+    def set_alert_level(self, position_id: int, level: float) -> None:
+        self.connection.execute(
+            "UPDATE position SET last_alert_level = ? WHERE id = ?",
+            (level, position_id),
+        )
         self.connection.commit()
 
-    def close_position(self, exit_time: int, exit_price: float, sell_fee: float, net_profit: float) -> None:
+    def update_position_extremes(self, position_id: int, high: float, low: float) -> StoredPosition | None:
+        row = self.connection.execute("SELECT * FROM position WHERE id = ?", (position_id,)).fetchone()
+        if row is None:
+            return None
+        position = self._position_from_row(row)
+        if position is None:
+            return None
+        max_price = max(position.max_price or position.entry_price, high)
+        min_price = min(position.min_price or position.entry_price, low)
+        self.connection.execute(
+            "UPDATE position SET max_price = ?, min_price = ? WHERE id = ?",
+            (max_price, min_price, position_id),
+        )
+        self.connection.commit()
+        return StoredPosition(
+            entry_time=position.entry_time,
+            entry_price=position.entry_price,
+            quantity=position.quantity,
+            buy_fee=position.buy_fee,
+            target_price=position.target_price,
+            last_alert_level=position.last_alert_level,
+            max_price=max_price,
+            min_price=min_price,
+            id=position.id,
+        )
+
+    def close_position(self, position_id: int, exit_time: int, exit_price: float, sell_fee: float, net_profit: float) -> None:
         with self.connection:
-            row = self.connection.execute("SELECT * FROM position WHERE id = 1").fetchone()
+            row = self.connection.execute("SELECT * FROM position WHERE id = ?", (position_id,)).fetchone()
             if row is None:
                 raise RuntimeError("Нет открытой позиции")
             self.connection.execute(
                 """INSERT INTO trades(
                     entry_time, exit_time, entry_price, exit_price, quantity,
-                    buy_fee, sell_fee, net_profit
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)""",
+                    buy_fee, sell_fee, net_profit, max_price, min_price
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     row["entry_time"], exit_time, row["entry_price"], exit_price,
                     row["quantity"], row["buy_fee"], sell_fee, net_profit,
+                    row["max_price"] if row["max_price"] is not None else max(row["entry_price"], exit_price),
+                    row["min_price"] if row["min_price"] is not None else min(row["entry_price"], exit_price),
                 ),
             )
-            self.connection.execute("DELETE FROM position WHERE id = 1")
+            self.connection.execute("DELETE FROM position WHERE id = ?", (position_id,))
 
     def stats(self) -> dict[str, float | int]:
         row = self.connection.execute(
             """SELECT COUNT(*) count,
                       COALESCE(SUM(net_profit), 0) profit,
                       COALESCE(AVG(net_profit), 0) average,
-                      COALESCE(SUM(CASE WHEN net_profit > 0 THEN 1 ELSE 0 END), 0) wins
+                      COALESCE(SUM(CASE WHEN net_profit > 0 THEN 1 ELSE 0 END), 0) wins,
+                      COALESCE(AVG(COALESCE(max_price, exit_price) - entry_price), 0) avg_max_move,
+                      COALESCE(MAX(COALESCE(max_price, exit_price) - entry_price), 0) best_max_move,
+                      COALESCE(AVG(COALESCE(min_price, entry_price) - entry_price), 0) avg_min_move,
+                      COALESCE(MIN(COALESCE(min_price, entry_price) - entry_price), 0) worst_min_move,
+                      COALESCE(SUM(CASE WHEN COALESCE(max_price, exit_price) - entry_price >= 10 THEN 1 ELSE 0 END), 0) reached_10,
+                      COALESCE(SUM(CASE WHEN COALESCE(max_price, exit_price) - entry_price >= 15 THEN 1 ELSE 0 END), 0) reached_15,
+                      COALESCE(SUM(CASE WHEN COALESCE(max_price, exit_price) - entry_price >= 20 THEN 1 ELSE 0 END), 0) reached_20,
+                      COALESCE(SUM(CASE WHEN COALESCE(max_price, exit_price) - entry_price >= 25 THEN 1 ELSE 0 END), 0) reached_25
                FROM trades"""
         ).fetchone()
         return dict(row)
@@ -145,4 +251,3 @@ class Storage:
             (timestamp, kind, message),
         )
         self.connection.commit()
-

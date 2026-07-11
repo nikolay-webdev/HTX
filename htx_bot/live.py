@@ -39,6 +39,24 @@ def _base_asset(symbol: str) -> str:
     return value
 
 
+def _target_recommendation(stats: dict[str, float | int]) -> str:
+    count = int(stats["count"])
+    if count < 10:
+        return "Данных мало: для выбора цели нужно хотя бы 10 закрытых сделок. Пока безопаснее тестировать +10/+12."
+
+    levels = [
+        (25, int(stats["reached_25"])),
+        (20, int(stats["reached_20"])),
+        (15, int(stats["reached_15"])),
+        (10, int(stats["reached_10"])),
+    ]
+    for level, reached in levels:
+        hit_rate = reached / count
+        if hit_rate >= 0.6:
+            return f"По статистике можно тестировать цель около +{level} USDT: цена доходила туда в {hit_rate * 100:.0f}% сделок."
+    return "По статистике дальние цели пока слабые. Лучше оставаться на +10 и копить данные."
+
+
 class LiveSimulator:
     def __init__(self, config: LiveConfig, storage: Storage, telegram: TelegramClient):
         self.config = config
@@ -47,18 +65,64 @@ class LiveSimulator:
         self.period_seconds = _period_seconds(config.period)
         self.base_asset = _base_asset(config.symbol)
 
+    @property
+    def total_capital(self) -> float:
+        return self.config.strategy.capital * self.config.strategy.max_open_positions
+
     def _send(self, text: str, kind: str = "telegram") -> None:
         self.telegram.send(text)
         self.storage.event(int(time.time()), kind, text)
 
+    def _state(self, paused: bool, positions: list[StoredPosition]) -> str:
+        if paused:
+            return "ПАУЗА"
+        if len(positions) >= self.config.strategy.max_open_positions:
+            return "УДЕРЖАНИЕ"
+        if positions:
+            return "УДЕРЖАНИЕ + АНАЛИЗ"
+        return "АНАЛИЗ"
+
+    def _position_block(self, position: StoredPosition, price: float, now: int, title: str | None = None) -> str:
+        value = position.quantity * price * (1 - self.config.strategy.fee_rate)
+        pnl = value - self.config.strategy.capital
+        max_move = (position.max_price or position.entry_price) - position.entry_price
+        min_move = (position.min_price or position.entry_price) - position.entry_price
+        header = title or f"📌 ПОЗИЦИЯ #{position.id}"
+        return (
+            f"{header}\n"
+            f"Цена покупки: {position.entry_price:.4f} USDT\n"
+            f"Количество: {position.quantity:.6f} {self.base_asset}\n"
+            f"Текущая цена: {price:.4f} USDT\n"
+            f"Ожидаемая цена продажи: {position.target_price:.4f} USDT\n"
+            f"Осталось до цели: {position.target_price - price:+.4f} USDT\n"
+            f"Текущий P&L: {pnl:+.2f} USDT\n"
+            f"Максимум после входа: {(position.max_price or position.entry_price):.4f} USDT ({max_move:+.2f})\n"
+            f"Минимум после входа: {(position.min_price or position.entry_price):.4f} USDT ({min_move:+.2f})\n"
+            f"Удержание: {_duration(now - position.entry_time)}"
+        )
+
+    def _can_open_new_position(self, entry_price: float, positions: list[StoredPosition]) -> tuple[bool, str]:
+        if len(positions) >= self.config.strategy.max_open_positions:
+            return False, "position_limit"
+        if not positions:
+            return True, "first_position"
+        lowest_entry = min(position.entry_price for position in positions)
+        required = lowest_entry - self.config.strategy.min_position_distance_usdt
+        if entry_price > required:
+            return False, "price_too_close_to_existing_position"
+        return True, "lower_slot"
+
     def start_message(self) -> str:
         paused = self.storage.get("paused", False)
-        position = self.storage.position()
-        state = "ПАУЗА" if paused else ("УДЕРЖАНИЕ" if position else "АНАЛИЗ")
+        positions = self.storage.positions()
+        state = self._state(paused, positions)
         return (
             "🧪 HTX СИМУЛЯТОР ЗАПУЩЕН\n\n"
             f"Пара: {self.config.symbol.upper()}\n"
-            f"Капитал: {self.config.strategy.capital:.2f} USDT\n"
+            f"Общий виртуальный бюджет: {self.total_capital:.2f} USDT\n"
+            f"Капитал на одну позицию: {self.config.strategy.capital:.2f} USDT\n"
+            f"Максимум открытых позиций: {self.config.strategy.max_open_positions}\n"
+            f"Минимальная дистанция между входами: {self.config.strategy.min_position_distance_usdt:.2f} USDT\n"
             f"Таймфрейм: {self.config.period}\n"
             f"Цель продажи: цена покупки + {self.config.strategy.target_price_delta:.2f} USDT\n"
             f"Проверка рынка: каждые {self.config.poll_seconds:g} сек.\n"
@@ -73,8 +137,12 @@ class LiveSimulator:
         paused = self.storage.get("paused", False)
         last_price = float(self.storage.get("last_price", 0.0))
         last_candle = int(self.storage.get("last_candle_ts", 0))
-        position = self.storage.position()
-        state = "ПАУЗА" if paused else ("УДЕРЖАНИЕ" if position else "АНАЛИЗ")
+        positions = self.storage.positions()
+        state = self._state(paused, positions)
+        total_pnl = sum(
+            position.quantity * last_price * (1 - self.config.strategy.fee_rate) - self.config.strategy.capital
+            for position in positions
+        )
         text = (
             "📊 СТАТУС\n\n"
             f"Режим: SIMULATION\n"
@@ -82,22 +150,15 @@ class LiveSimulator:
             f"Пара: {self.config.symbol.upper()}\n"
             f"Последняя цена: {last_price:.4f} USDT\n"
             f"Последняя закрытая свеча: {_time(last_candle) if last_candle else 'прогрев'}\n"
-            f"Позиция: {'открыта' if position else 'нет'}"
+            f"Открытые позиции: {len(positions)} / {self.config.strategy.max_open_positions}\n"
+            f"Задействованный капитал: {len(positions) * self.config.strategy.capital:.2f} / {self.total_capital:.2f} USDT\n"
+            f"Суммарный текущий P&L: {total_pnl:+.2f} USDT"
         )
-        if position is None:
+        if not positions:
             return text
-        value = position.quantity * last_price * (1 - self.config.strategy.fee_rate)
-        pnl = value - self.config.strategy.capital
-        return (
-            text
-            + "\n\n📌 ОТКРЫТАЯ ПОЗИЦИЯ\n"
-            + f"Цена покупки: {position.entry_price:.4f} USDT\n"
-            + f"Текущая цена: {last_price:.4f} USDT\n"
-            + f"Ожидаемая цена продажи: {position.target_price:.4f} USDT\n"
-            + f"Осталось до цели: {position.target_price - last_price:+.4f} USDT\n"
-            + f"Текущий P&L: {pnl:+.2f} USDT\n"
-            + f"Удержание: {_duration(int(time.time()) - position.entry_time)}"
-        )
+        now = int(time.time())
+        blocks = [self._position_block(position, last_price, now) for position in positions]
+        return text + "\n\n" + "\n\n".join(blocks)
 
     def current_market_price_text(self) -> str:
         last_price = float(self.storage.get("last_price", 0.0))
@@ -110,32 +171,36 @@ class LiveSimulator:
         )
 
     def position_text(self, now: int | None = None) -> str:
-        position = self.storage.position()
-        if position is None:
+        positions = self.storage.positions()
+        if not positions:
             return "Открытой виртуальной позиции нет."
         now = now or int(time.time())
-        price = float(self.storage.get("last_price", position.entry_price))
-        value = position.quantity * price * (1 - self.config.strategy.fee_rate)
-        pnl = value - self.config.strategy.capital
-        return (
-            "📌 ВИРТУАЛЬНАЯ ПОЗИЦИЯ\n\n"
-            f"Покупка: {position.entry_price:.4f} USDT\n"
-            f"Количество: {position.quantity:.6f} {self.base_asset}\n"
-            f"Текущая цена: {price:.4f} USDT\n"
-            f"Продажа: {position.target_price:.4f} USDT\n"
-            f"Текущий P&L: {pnl:+.2f} USDT\n"
-            f"Удержание: {_duration(now - position.entry_time)}"
-        )
+        fallback = positions[0].entry_price
+        price = float(self.storage.get("last_price", fallback))
+        blocks = [self._position_block(position, price, now) for position in positions]
+        return "📌 ВИРТУАЛЬНЫЕ ПОЗИЦИИ\n\n" + "\n\n".join(blocks)
 
     def stats_text(self) -> str:
         stats = self.storage.stats()
+        count = max(1, int(stats["count"]))
         return (
             "📈 СТАТИСТИКА СИМУЛЯТОРА\n\n"
             f"Завершённых сделок: {stats['count']}\n"
             f"Прибыльных: {stats['wins']}\n"
             f"Реализованный P&L: {stats['profit']:.2f} USDT\n"
             f"Средняя сделка: {stats['average']:.2f} USDT\n"
-            f"Максимальная открытая просадка: {abs(float(self.storage.get('max_drawdown', 0.0))):.2f} USDT"
+            f"Максимальная открытая просадка: {abs(float(self.storage.get('max_drawdown', 0.0))):.2f} USDT\n\n"
+            "Потенциал после входа:\n"
+            f"Средний максимум после покупки: +{stats['avg_max_move']:.2f} USDT\n"
+            f"Лучший максимум после покупки: +{stats['best_max_move']:.2f} USDT\n"
+            f"Средняя просадка после покупки: {stats['avg_min_move']:.2f} USDT\n"
+            f"Худшая просадка после покупки: {stats['worst_min_move']:.2f} USDT\n\n"
+            "Достижение целей по закрытым сделкам:\n"
+            f"+10 USDT: {stats['reached_10']} из {stats['count']} ({int(stats['reached_10']) / count * 100:.0f}%)\n"
+            f"+15 USDT: {stats['reached_15']} из {stats['count']} ({int(stats['reached_15']) / count * 100:.0f}%)\n"
+            f"+20 USDT: {stats['reached_20']} из {stats['count']} ({int(stats['reached_20']) / count * 100:.0f}%)\n"
+            f"+25 USDT: {stats['reached_25']} из {stats['count']} ({int(stats['reached_25']) / count * 100:.0f}%)\n\n"
+            f"Рекомендация: {_target_recommendation(stats)}"
         )
 
     def handle_commands(self) -> None:
@@ -183,12 +248,13 @@ class LiveSimulator:
         proceeds = position.quantity * position.target_price
         sell_fee = proceeds * self.config.strategy.fee_rate
         net = proceeds - sell_fee - self.config.strategy.capital
-        self.storage.close_position(timestamp, position.target_price, sell_fee, net)
+        self.storage.close_position(position.id, timestamp, position.target_price, sell_fee, net)
         cooldown_until = timestamp + self.config.strategy.cooldown_candles * self.period_seconds
         self.storage.set("cooldown_until", cooldown_until)
         stats = self.storage.stats()
         self._send(
             "✅ ВИРТУАЛЬНАЯ ПРОДАЖА\n\n"
+            f"Позиция: #{position.id}\n"
             f"Время: {_time(timestamp)}\n"
             f"Покупка: {position.entry_price:.4f} USDT\n"
             f"Продажа: {position.target_price:.4f} USDT\n"
@@ -210,9 +276,10 @@ class LiveSimulator:
         if not crossed:
             return
         level = min(crossed)
-        self.storage.set_alert_level(level)
+        self.storage.set_alert_level(position.id, level)
         self._send(
             "⚠️ ВИРТУАЛЬНАЯ ПОЗИЦИЯ В ПРОСАДКЕ\n\n"
+            f"Позиция: #{position.id}\n"
             f"Покупка: {position.entry_price:.4f} USDT\n"
             f"Текущая цена: {price:.4f} USDT\n"
             f"Просадка цены: {drawdown_pct * 100:.2f}%\n"
@@ -221,6 +288,18 @@ class LiveSimulator:
             f"Удержание: {_duration(timestamp - position.entry_time)}",
             "drawdown",
         )
+
+    def _track_positions_for_candle(self, candle: Candle, timestamp: int) -> bool:
+        sold = False
+        for position in self.storage.positions():
+            updated = self.storage.update_position_extremes(position.id, candle.high, candle.low) or position
+            entry_candle_ts = updated.entry_time // self.period_seconds * self.period_seconds
+            if candle.timestamp >= entry_candle_ts and candle.high >= updated.target_price:
+                self._sell(updated, timestamp)
+                sold = True
+                continue
+            self._check_drawdown(updated, candle.close, timestamp)
+        return sold
 
     def process_market(self, candles: list[Candle], now: int | None = None) -> str:
         if not candles:
@@ -240,15 +319,10 @@ class LiveSimulator:
 
         new_candles = [candle for candle in closed if candle.timestamp > int(last_processed)]
         if not new_candles:
-            position = self.storage.position()
-            if position:
-                current = candles[-1]
-                entry_candle_ts = position.entry_time // self.period_seconds * self.period_seconds
-                if current.timestamp >= entry_candle_ts and current.high >= position.target_price:
-                    self._sell(position, now)
-                    return "sold"
-                self._check_drawdown(position, candles[-1].close, now)
-            return "idle"
+            current = candles[-1]
+            if self._track_positions_for_candle(current, now):
+                return "sold"
+            return "holding" if self.storage.positions() else "idle"
 
         if int(last_processed) + self.period_seconds < closed[0].timestamp:
             gap_key = f"{last_processed}:{closed[0].timestamp}"
@@ -263,36 +337,27 @@ class LiveSimulator:
                 )
                 self.storage.set("last_gap_notice", gap_key)
 
-        # Existing virtual sell remains active during downtime and pause.
-        position = self.storage.position()
+        # Existing virtual sells remain active during downtime and pause.
         sold_position = False
         for candle in new_candles:
-            if position and candle.high >= position.target_price:
-                self._sell(position, candle.timestamp)
-                position = None
-                sold_position = True
+            sold_position = self._track_positions_for_candle(candle, candle.timestamp) or sold_position
             self.storage.set("last_candle_ts", candle.timestamp)
 
         if sold_position:
             return "sold"
 
-        position = self.storage.position()
-        if position:
-            current = candles[-1]
-            entry_candle_ts = position.entry_time // self.period_seconds * self.period_seconds
-            if (
-                current.timestamp >= cutoff
-                and current.timestamp >= entry_candle_ts
-                and current.high >= position.target_price
-            ):
-                self._sell(position, now)
-                return "sold"
-            self._check_drawdown(position, candles[-1].close, now)
+        current = candles[-1]
+        if current.timestamp >= cutoff and self._track_positions_for_candle(current, now):
+            return "sold"
+
+        positions = self.storage.positions()
+        has_positions = bool(positions)
+        if len(positions) >= self.config.strategy.max_open_positions:
             return "holding"
         if self.storage.get("paused", False):
-            return "paused"
+            return "holding" if has_positions else "paused"
         if new_candles[-1].timestamp < int(self.storage.get("cooldown_until", 0)):
-            return "cooldown"
+            return "holding" if has_positions else "cooldown"
 
         signal_candle = new_candles[-1]
         active = next((c for c in candles if c.timestamp > signal_candle.timestamp), None)
@@ -300,9 +365,14 @@ class LiveSimulator:
         history = [candle for candle in closed if candle.timestamp <= signal_candle.timestamp]
         setup = detect_entry_setup(history, fill_reference, self.config.strategy)
         if setup is None:
-            return "analyzing"
+            return "holding" if has_positions else "analyzing"
 
         entry_price = setup.entry_price
+        can_open, reason = self._can_open_new_position(entry_price, positions)
+        if not can_open:
+            self.storage.set("last_entry_skip_reason", reason)
+            return "holding" if has_positions else "analyzing"
+
         buy_fee = self.config.strategy.capital * self.config.strategy.fee_rate
         quantity = (self.config.strategy.capital - buy_fee) / entry_price
         target = setup.target_price
@@ -314,11 +384,14 @@ class LiveSimulator:
             buy_fee=buy_fee,
             target_price=target,
             last_alert_level=0.0,
+            max_price=entry_price,
+            min_price=entry_price,
         )
-        self.storage.open_position(position)
+        position = self.storage.open_position(position)
         expected_proceeds = quantity * target * (1 - self.config.strategy.fee_rate)
         self._send(
             "🟢 ВИРТУАЛЬНАЯ ПОКУПКА\n\n"
+            f"Позиция: #{position.id}\n"
             f"Время: {_time(position.entry_time)}\n"
             f"Цена: {entry_price:.4f} USDT\n"
             f"Количество: {quantity:.6f} {self.base_asset}\n"
@@ -326,6 +399,7 @@ class LiveSimulator:
             f"Комиссия покупки: {buy_fee:.2f} USDT\n\n"
             f"Поддержка диапазона: {setup.support:.4f} USDT\n"
             f"Сопротивление диапазона: {setup.resistance:.4f} USDT\n"
+            f"Открытые позиции после покупки: {len(self.storage.positions())} / {self.config.strategy.max_open_positions}\n"
             f"Виртуальная продажа: {target:.4f} USDT (+{target - entry_price:.2f})\n"
             f"Ожидаемая валовая прибыль от движения цены: {quantity * (target - entry_price):.2f} USDT\n"
             f"Ожидаемая чистая прибыль: {expected_proceeds - self.config.strategy.capital:.2f} USDT\n\n"

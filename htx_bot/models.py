@@ -21,6 +21,8 @@ class Candle:
 @dataclass(frozen=True)
 class StrategyConfig:
     capital: float = 1800.0
+    max_open_positions: int = 2
+    min_position_distance_usdt: float = 70.0
     fee_rate: float = 0.002
     slippage_rate: float = 0.0002
     target_price_delta: float = 10.0

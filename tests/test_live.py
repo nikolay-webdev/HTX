@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import sqlite3
 from pathlib import Path
 
 from htx_bot.config import LiveConfig
@@ -49,6 +50,8 @@ class LiveSimulatorTests(unittest.TestCase):
             fee_rate=0.002,
             slippage_rate=0,
             target_price_delta=10,
+            max_open_positions=2,
+            min_position_distance_usdt=5,
             lookback=3,
             min_range_pct=0.01,
             max_slope_pct=1,
@@ -106,6 +109,39 @@ class LiveSimulatorTests(unittest.TestCase):
         self.assertIsNone(self.storage.position())
         self.assertEqual(self.storage.stats()["count"], 1)
         self.assertIn("ВИРТУАЛЬНАЯ ПРОДАЖА", self.telegram.sent[-1])
+
+    def test_second_lower_position_can_open_while_first_is_holding(self) -> None:
+        initial = [
+            make_candle(0, 82),
+            make_candle(1, 80, high=100),
+            make_candle(2, 80),
+        ]
+        self.simulator.process_market(initial, initial[-1].timestamp + 60)
+
+        signal = make_candle(3, 81, low=79.8, open_=79)
+        active = make_candle(4, 81)
+        self.assertEqual(
+            self.simulator.process_market(initial + [signal, active], active.timestamp + 30),
+            "bought",
+        )
+
+        lower_range = [
+            make_candle(5, 75, high=88, low=74),
+            make_candle(6, 75, high=88, low=74),
+            make_candle(7, 75, high=88, low=74),
+        ]
+        lower_signal = make_candle(8, 76, high=78, low=73.8, open_=74)
+        lower_active = make_candle(9, 76)
+
+        result = self.simulator.process_market(
+            initial + [signal, active] + lower_range + [lower_signal, lower_active],
+            lower_active.timestamp + 30,
+        )
+
+        self.assertEqual(result, "bought")
+        self.assertEqual(len(self.storage.positions()), 2)
+        self.assertIn("Позиция: #2", self.telegram.sent[-1])
+        self.assertIn("Открытые позиции после покупки: 2 / 2", self.telegram.sent[-1])
 
     def test_live_waits_when_last_candle_does_not_confirm_rebound(self) -> None:
         initial = [
@@ -184,12 +220,88 @@ class LiveSimulatorTests(unittest.TestCase):
         self.assertIn("Статус: УДЕРЖАНИЕ", self.simulator.start_message())
 
     def test_position_survives_database_reopen(self) -> None:
-        expected = StoredPosition(100, 80.0, 6.2, 1.0, 82.0, 0.0)
+        expected = StoredPosition(100, 80.0, 6.2, 1.0, 82.0, 0.0, 80.0, 80.0)
         self.storage.open_position(expected)
         self.storage.close()
         self.storage = Storage(self.config.database_path)
         self.simulator.storage = self.storage
         self.assertEqual(self.storage.position(), expected)
+
+    def test_old_single_position_database_migrates_to_multiple_positions(self) -> None:
+        self.storage.close()
+        database_path = self.config.database_path
+        database_path.unlink(missing_ok=True)
+        connection = sqlite3.connect(database_path)
+        connection.executescript(
+            """
+            CREATE TABLE state (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            CREATE TABLE position (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                entry_time INTEGER NOT NULL,
+                entry_price REAL NOT NULL,
+                quantity REAL NOT NULL,
+                buy_fee REAL NOT NULL,
+                target_price REAL NOT NULL,
+                last_alert_level REAL NOT NULL DEFAULT 0
+            );
+            CREATE TABLE trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entry_time INTEGER NOT NULL,
+                exit_time INTEGER NOT NULL,
+                entry_price REAL NOT NULL,
+                exit_price REAL NOT NULL,
+                quantity REAL NOT NULL,
+                buy_fee REAL NOT NULL,
+                sell_fee REAL NOT NULL,
+                net_profit REAL NOT NULL
+            );
+            INSERT INTO position VALUES(1, 100, 1800, 1, 3.6, 1810, 0);
+            """
+        )
+        connection.commit()
+        connection.close()
+
+        self.storage = Storage(database_path)
+        first = self.storage.position()
+        self.assertIsNotNone(first)
+        assert first is not None
+        self.assertEqual(first.entry_price, 1800)
+
+        second = self.storage.open_position(
+            StoredPosition(200, 1700.0, 1.05, 3.6, 1710.0, 0.0)
+        )
+
+        self.assertEqual(second.id, 2)
+        self.assertEqual(len(self.storage.positions()), 2)
+
+    def test_stats_track_price_potential_after_entry(self) -> None:
+        initial = [
+            make_candle(0, 82),
+            make_candle(1, 80, high=100),
+            make_candle(2, 80),
+        ]
+        self.simulator.process_market(initial, initial[-1].timestamp + 60)
+
+        signal = make_candle(3, 81, low=79.8, open_=79)
+        active = make_candle(4, 81)
+        self.simulator.process_market(initial + [signal, active], active.timestamp + 30)
+
+        dip = make_candle(5, 82, high=84, low=77)
+        rally = make_candle(6, 93, high=93)
+        current = make_candle(7, 93)
+        self.simulator.process_market(
+            initial + [signal, active, dip, rally, current], current.timestamp + 30
+        )
+
+        stats = self.storage.stats()
+        self.assertEqual(stats["count"], 1)
+        self.assertGreaterEqual(stats["reached_10"], 1)
+        self.assertGreaterEqual(stats["best_max_move"], 10)
+        self.assertLessEqual(stats["worst_min_move"], -4)
+        self.assertIn("Потенциал после входа", self.simulator.stats_text())
 
 
 if __name__ == "__main__":

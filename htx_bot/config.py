@@ -51,6 +51,8 @@ def load_live_config(env_file: str | Path = ".env") -> LiveConfig:
 
     strategy = StrategyConfig(
         capital=_float("CAPITAL", 1800.0),
+        max_open_positions=_int("MAX_OPEN_POSITIONS", 2),
+        min_position_distance_usdt=_float("MIN_POSITION_DISTANCE_USDT", 70.0),
         fee_rate=_float("FEE_RATE", 0.002),
         slippage_rate=_float("SLIPPAGE_RATE", 0.0002),
         target_price_delta=_float("TARGET_PRICE_DELTA", 10.0),
@@ -65,6 +67,10 @@ def load_live_config(env_file: str | Path = ".env") -> LiveConfig:
     )
     if strategy.capital <= 0:
         raise ValueError("CAPITAL должен быть больше нуля")
+    if strategy.max_open_positions < 1:
+        raise ValueError("MAX_OPEN_POSITIONS должен быть не меньше 1")
+    if strategy.min_position_distance_usdt < 0:
+        raise ValueError("MIN_POSITION_DISTANCE_USDT не должен быть отрицательным")
     if not 0 <= strategy.fee_rate < 0.1:
         raise ValueError("FEE_RATE должен быть от 0 до 0.1")
     if strategy.target_price_delta <= 0:
