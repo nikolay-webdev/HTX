@@ -141,6 +141,41 @@ scripts/pull_stats_from_vps.sh nikoshot@SERVER_IP
 
 Скрипт делает backup текущей локальной базы в `backups/`, затем скачивает консистентную копию базы с VPS в `data/eth_live_simulator.db`.
 
+## Проверить синхронизацию и работу сервиса
+
+Локально:
+
+```bash
+scripts/check_vps_sync.sh
+```
+
+Проверка показывает:
+
+- Git branch и commit локально;
+- Git branch и commit на VPS;
+- количество незакоммиченных файлов;
+- статистику локальной и серверной SQLite-базы;
+- включён ли `htx-bot` в автозапуск;
+- работает ли `htx-bot` сейчас;
+- включён ли restart policy у systemd-сервиса.
+
+Нормальное состояние:
+
+```text
+LOCAL head = VPS head
+LOCAL dirty_files = 0
+VPS dirty_files = 0
+VPS service_enabled = enabled
+VPS service_active = active
+VPS service_restart = always
+```
+
+Если серверная статистика свежее локальной, это нормально: бот работает на VPS и пишет в серверную базу. Чтобы обновить локальную копию, выполните:
+
+```bash
+scripts/pull_stats_from_vps.sh
+```
+
 ## sudo без пароля только для сервиса
 
 Чтобы `scripts/deploy_code.sh` не спрашивал пароль sudo при перезапуске сервиса, можно разрешить пользователю `nikoshot` управлять только этим сервисом.
