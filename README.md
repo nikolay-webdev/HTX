@@ -188,3 +188,7 @@ timestamp,open,high,low,close,volume
 ```bash
 python3 -m unittest discover -s tests -v
 ```
+
+## VPS
+
+Инструкция по запуску через systemd и рабочему циклу деплоя находится в [`deploy/README.md`](deploy/README.md).

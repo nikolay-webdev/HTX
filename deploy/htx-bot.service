@@ -1,0 +1,27 @@
+[Unit]
+Description=HTX live simulator bot
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=nikoshot
+Group=nikoshot
+WorkingDirectory=/srv/bots/htx
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 -m htx_bot live --env /srv/bots/htx/.env
+Restart=always
+RestartSec=10
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/srv/bots/htx/data
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
