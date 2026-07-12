@@ -18,6 +18,7 @@ VPS_DB="${HTX_VPS_DB:-$VPS_PATH/data/eth_live_simulator.db}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 LOCAL_TMP="/tmp/eth_live_simulator.import.$STAMP.db"
 REMOTE_TMP="/tmp/eth_live_simulator.import.$STAMP.db"
+REMOTE_SCRIPT="/tmp/htx_import_stats.$STAMP.sh"
 
 for arg in "$@"; do
   case "$arg" in
@@ -83,10 +84,12 @@ PY
 echo "Uploading database backup to $HOST..."
 scp "$LOCAL_TMP" "$HOST:$REMOTE_TMP"
 
-echo "Replacing VPS database. A VPS backup will be kept in $VPS_PATH/backups."
-ssh -tt "$HOST" \
-  "HTX_VPS_PATH=$(printf '%q' "$VPS_PATH") HTX_SERVICE=$(printf '%q' "$SERVICE") HTX_OWNER=$(printf '%q' "$OWNER") HTX_VPS_DB=$(printf '%q' "$VPS_DB") HTX_REMOTE_TMP=$(printf '%q' "$REMOTE_TMP") HTX_STAMP=$(printf '%q' "$STAMP") bash -s" <<'REMOTE_SCRIPT'
+LOCAL_REMOTE_SCRIPT="$(mktemp "${TMPDIR:-/tmp}/htx_import_stats.XXXXXX")"
+trap 'rm -f "$LOCAL_TMP" "$LOCAL_REMOTE_SCRIPT"' EXIT
+chmod 600 "$LOCAL_REMOTE_SCRIPT"
+cat > "$LOCAL_REMOTE_SCRIPT" <<'REMOTE_SCRIPT_BODY'
 set -euo pipefail
+trap 'rm -f "$HTX_REMOTE_SCRIPT"' EXIT
 
 cd "$HTX_VPS_PATH"
 sudo -v
@@ -118,6 +121,11 @@ PY
 sudo systemctl start "$HTX_SERVICE"
 sudo systemctl --no-pager --full status "$HTX_SERVICE"
 rm -f "$HTX_REMOTE_TMP"
-REMOTE_SCRIPT
+REMOTE_SCRIPT_BODY
+
+echo "Replacing VPS database. A VPS backup will be kept in $VPS_PATH/backups."
+scp "$LOCAL_REMOTE_SCRIPT" "$HOST:$REMOTE_SCRIPT"
+ssh -t "$HOST" \
+  "HTX_VPS_PATH=$(printf '%q' "$VPS_PATH") HTX_SERVICE=$(printf '%q' "$SERVICE") HTX_OWNER=$(printf '%q' "$OWNER") HTX_VPS_DB=$(printf '%q' "$VPS_DB") HTX_REMOTE_TMP=$(printf '%q' "$REMOTE_TMP") HTX_STAMP=$(printf '%q' "$STAMP") HTX_REMOTE_SCRIPT=$(printf '%q' "$REMOTE_SCRIPT") bash $(printf '%q' "$REMOTE_SCRIPT")"
 
 echo "Import finished."

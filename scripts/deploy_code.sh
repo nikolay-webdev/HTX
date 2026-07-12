@@ -13,6 +13,8 @@ VPS_PATH="${HTX_VPS_PATH:-/srv/bots/htx}"
 SERVICE="${HTX_SERVICE:-htx-bot}"
 REMOTE="${HTX_REMOTE:-origin}"
 BRANCH="${HTX_BRANCH:-$(git branch --show-current)}"
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+REMOTE_SCRIPT="/tmp/htx_deploy_code.$STAMP.sh"
 
 if [[ -z "$HOST" ]]; then
   echo "Usage: scripts/deploy_code.sh nikoshot@SERVER_IP"
@@ -37,10 +39,12 @@ python3 -m unittest discover -s tests -v
 echo "Pushing $BRANCH to $REMOTE..."
 git push "$REMOTE" "$BRANCH"
 
-echo "Deploying on $HOST..."
-ssh -tt "$HOST" \
-  "HTX_VPS_PATH=$(printf '%q' "$VPS_PATH") HTX_SERVICE=$(printf '%q' "$SERVICE") HTX_REMOTE=$(printf '%q' "$REMOTE") HTX_BRANCH=$(printf '%q' "$BRANCH") bash -s" <<'REMOTE_SCRIPT'
+LOCAL_REMOTE_SCRIPT="$(mktemp "${TMPDIR:-/tmp}/htx_deploy_code.XXXXXX")"
+trap 'rm -f "$LOCAL_REMOTE_SCRIPT"' EXIT
+chmod 600 "$LOCAL_REMOTE_SCRIPT"
+cat > "$LOCAL_REMOTE_SCRIPT" <<'REMOTE_SCRIPT_BODY'
 set -euo pipefail
+trap 'rm -f "$HTX_REMOTE_SCRIPT"' EXIT
 
 cd "$HTX_VPS_PATH"
 
@@ -63,6 +67,11 @@ sudo systemctl daemon-reload
 sudo systemctl enable "$HTX_SERVICE"
 sudo systemctl restart "$HTX_SERVICE"
 sudo systemctl --no-pager --full status "$HTX_SERVICE"
-REMOTE_SCRIPT
+REMOTE_SCRIPT_BODY
+
+echo "Deploying on $HOST..."
+scp "$LOCAL_REMOTE_SCRIPT" "$HOST:$REMOTE_SCRIPT"
+ssh -t "$HOST" \
+  "HTX_VPS_PATH=$(printf '%q' "$VPS_PATH") HTX_SERVICE=$(printf '%q' "$SERVICE") HTX_REMOTE=$(printf '%q' "$REMOTE") HTX_BRANCH=$(printf '%q' "$BRANCH") HTX_REMOTE_SCRIPT=$(printf '%q' "$REMOTE_SCRIPT") bash $(printf '%q' "$REMOTE_SCRIPT")"
 
 echo "Deploy finished."
