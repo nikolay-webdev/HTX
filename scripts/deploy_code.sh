@@ -38,7 +38,7 @@ echo "Pushing $BRANCH to $REMOTE..."
 git push "$REMOTE" "$BRANCH"
 
 echo "Deploying on $HOST..."
-ssh "$HOST" \
+ssh -tt "$HOST" \
   "HTX_VPS_PATH=$(printf '%q' "$VPS_PATH") HTX_SERVICE=$(printf '%q' "$SERVICE") HTX_REMOTE=$(printf '%q' "$REMOTE") HTX_BRANCH=$(printf '%q' "$BRANCH") bash -s" <<'REMOTE_SCRIPT'
 set -euo pipefail
 
@@ -57,6 +57,7 @@ chmod 700 data
 
 python3 -m unittest discover -s tests -v
 
+sudo -v
 sudo cp deploy/htx-bot.service /etc/systemd/system/htx-bot.service
 sudo systemctl daemon-reload
 sudo systemctl enable "$HTX_SERVICE"

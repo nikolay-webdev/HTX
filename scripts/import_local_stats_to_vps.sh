@@ -84,11 +84,12 @@ echo "Uploading database backup to $HOST..."
 scp "$LOCAL_TMP" "$HOST:$REMOTE_TMP"
 
 echo "Replacing VPS database. A VPS backup will be kept in $VPS_PATH/backups."
-ssh "$HOST" \
+ssh -tt "$HOST" \
   "HTX_VPS_PATH=$(printf '%q' "$VPS_PATH") HTX_SERVICE=$(printf '%q' "$SERVICE") HTX_OWNER=$(printf '%q' "$OWNER") HTX_VPS_DB=$(printf '%q' "$VPS_DB") HTX_REMOTE_TMP=$(printf '%q' "$REMOTE_TMP") HTX_STAMP=$(printf '%q' "$STAMP") bash -s" <<'REMOTE_SCRIPT'
 set -euo pipefail
 
 cd "$HTX_VPS_PATH"
+sudo -v
 sudo systemctl stop "$HTX_SERVICE"
 
 mkdir -p data backups
