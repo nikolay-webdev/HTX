@@ -3,14 +3,25 @@ from __future__ import annotations
 import csv
 import json
 import ssl
+import time
 from datetime import datetime
 from pathlib import Path
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .models import Candle
 
-HTX_KLINES_URL = "https://api.huobi.pro/market/history/kline"
+HTX_KLINES_URLS = (
+    "https://api.huobi.pro/market/history/kline",
+    "https://api-aws.huobi.pro/market/history/kline",
+)
+HTX_REQUEST_TIMEOUT = 20
+HTX_RETRY_DELAYS = (1.0, 2.0)
+
+
+class HTXNetworkError(RuntimeError):
+    pass
 
 
 def _ssl_context() -> ssl.SSLContext:
@@ -24,9 +35,34 @@ def fetch_htx_candles(symbol: str = "ethusdt", period: str = "1min", size: int =
     if not 1 <= size <= 2000:
         raise ValueError("HTX size должен быть от 1 до 2000")
     query = urlencode({"symbol": symbol.lower(), "period": period, "size": size})
-    request = Request(f"{HTX_KLINES_URL}?{query}", headers={"User-Agent": "htx-range-simulator/0.1"})
-    with urlopen(request, timeout=20, context=_ssl_context()) as response:
-        payload = json.load(response)
+    payload = None
+    last_error: URLError | None = None
+    attempts = len(HTX_RETRY_DELAYS) + 1
+    for attempt in range(attempts):
+        endpoint = HTX_KLINES_URLS[attempt % len(HTX_KLINES_URLS)]
+        request = Request(
+            f"{endpoint}?{query}",
+            headers={"User-Agent": "htx-range-simulator/0.1"},
+        )
+        try:
+            with urlopen(request, timeout=HTX_REQUEST_TIMEOUT, context=_ssl_context()) as response:
+                payload = json.load(response)
+            break
+        except HTTPError:
+            # An HTTP response is not a TLS/connectivity failure. Retrying it on
+            # another hostname can hide a real API or request error.
+            raise
+        except URLError as error:
+            last_error = error
+            if attempt == attempts - 1:
+                reason = getattr(error, "reason", error)
+                raise HTXNetworkError(
+                    f"HTX network error after {attempts} attempts: {reason}"
+                ) from None
+            time.sleep(HTX_RETRY_DELAYS[attempt])
+
+    if payload is None:  # Defensive: every loop exit must either set it or raise.
+        raise HTXNetworkError(f"HTX network error: {last_error}")
     if payload.get("status") != "ok":
         raise RuntimeError(f"HTX API error: {payload}")
     candles = [
