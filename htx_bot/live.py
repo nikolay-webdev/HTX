@@ -88,8 +88,15 @@ class LiveSimulator:
         max_move = (position.max_price or position.entry_price) - position.entry_price
         min_move = (position.min_price or position.entry_price) - position.entry_price
         header = title or f"📌 ПОЗИЦИЯ #{position.id}"
+        stop_line = (
+            f"\nЗащитный стоп: {position.stop_price:.4f} USDT"
+            if position.stop_price is not None
+            else ""
+        )
+        signal_name = "ложный пробой + возврат" if position.entry_kind == "reversal" else "диапазон"
         return (
             f"{header}\n"
+            f"Сигнал входа: {signal_name}\n"
             f"Цена покупки: {position.entry_price:.4f} USDT\n"
             f"Количество: {position.quantity:.6f} {self.base_asset}\n"
             f"Текущая цена: {price:.4f} USDT\n"
@@ -99,6 +106,7 @@ class LiveSimulator:
             f"Максимум после входа: {(position.max_price or position.entry_price):.4f} USDT ({max_move:+.2f})\n"
             f"Минимум после входа: {(position.min_price or position.entry_price):.4f} USDT ({min_move:+.2f})\n"
             f"Удержание: {_duration(now - position.entry_time)}"
+            f"{stop_line}"
         )
 
     def _can_open_new_position(self, entry_price: float, positions: list[StoredPosition]) -> tuple[bool, str]:
@@ -127,8 +135,9 @@ class LiveSimulator:
             f"Цель продажи: цена покупки + {self.config.strategy.target_price_delta:.2f} USDT\n"
             f"Проверка рынка: каждые {self.config.poll_seconds:g} сек.\n"
             f"Комиссия: {self.config.strategy.fee_rate * 100:.3f}% за операцию\n"
+            f"Ложный пробой + возврат: {'включён' if self.config.strategy.reversal_enabled else 'выключен'}\n"
             f"Статус: {state}\n\n"
-            "Цикл: найти диапазон → подтвердить отскок → купить → дождаться цели.\n"
+            "Входы: нижняя зона диапазона или объёмный ложный пробой с подтверждённым возвратом.\n"
             "Реальные ордера и HTX API-ключи не используются.\n"
             "Команды: /status /position /current_market_price /stats /pause /resume /help"
         )
@@ -189,6 +198,10 @@ class LiveSimulator:
             f"Прибыльных: {stats['wins']}\n"
             f"Реализованный P&L: {stats['profit']:.2f} USDT\n"
             f"Средняя сделка: {stats['average']:.2f} USDT\n"
+            f"Сделки диапазона: {stats['range_count']}\n"
+            f"Сделки ложного пробоя: {stats['reversal_count']} "
+            f"(P&L {stats['reversal_profit']:+.2f} USDT)\n"
+            f"Закрытия по защитному стопу: {stats['stop_count']}\n"
             f"Максимальная открытая просадка: {abs(float(self.storage.get('max_drawdown', 0.0))):.2f} USDT\n\n"
             "Потенциал после входа:\n"
             f"Средний максимум после покупки: +{stats['avg_max_move']:.2f} USDT\n"
@@ -244,27 +257,47 @@ class LiveSimulator:
                 response = "Неизвестная команда. Используйте /help."
             self.telegram.send(response)
 
-    def _sell(self, position: StoredPosition, timestamp: int) -> None:
-        proceeds = position.quantity * position.target_price
+    def _sell(
+        self,
+        position: StoredPosition,
+        timestamp: int,
+        exit_price: float | None = None,
+        exit_reason: str = "target",
+    ) -> None:
+        exit_price = position.target_price if exit_price is None else exit_price
+        proceeds = position.quantity * exit_price
         sell_fee = proceeds * self.config.strategy.fee_rate
         net = proceeds - sell_fee - self.config.strategy.capital
-        self.storage.close_position(position.id, timestamp, position.target_price, sell_fee, net)
+        self.storage.close_position(
+            position.id,
+            timestamp,
+            exit_price,
+            sell_fee,
+            net,
+            exit_reason,
+        )
         cooldown_until = timestamp + self.config.strategy.cooldown_candles * self.period_seconds
         self.storage.set("cooldown_until", cooldown_until)
         stats = self.storage.stats()
+        sale_header = (
+            "🛑 ВИРТУАЛЬНЫЙ СТОП\n\n"
+            if exit_reason == "stop"
+            else "✅ ВИРТУАЛЬНАЯ ПРОДАЖА\n\n"
+        )
         self._send(
-            "✅ ВИРТУАЛЬНАЯ ПРОДАЖА\n\n"
+            sale_header
+            +
             f"Позиция: #{position.id}\n"
             f"Время: {_time(timestamp)}\n"
             f"Покупка: {position.entry_price:.4f} USDT\n"
-            f"Продажа: {position.target_price:.4f} USDT\n"
-            f"Разница цены: +{position.target_price - position.entry_price:.2f} USDT\n"
+            f"Продажа: {exit_price:.4f} USDT\n"
+            f"Разница цены: {exit_price - position.entry_price:+.2f} USDT\n"
             f"Количество: {position.quantity:.6f} {self.base_asset}\n"
             f"Комиссия продажи: {sell_fee:.2f} USDT\n"
             f"Чистая прибыль: {net:+.2f} USDT\n"
             f"Накопленная прибыль: {stats['profit']:.2f} USDT\n"
             f"Удержание: {_duration(timestamp - position.entry_time)}",
-            "sell",
+            "stop" if exit_reason == "stop" else "sell",
         )
 
     def _check_drawdown(self, position: StoredPosition, price: float, timestamp: int) -> None:
@@ -294,6 +327,19 @@ class LiveSimulator:
         for position in self.storage.positions():
             updated = self.storage.update_position_extremes(position.id, candle.high, candle.low) or position
             entry_candle_ts = updated.entry_time // self.period_seconds * self.period_seconds
+            if (
+                updated.stop_price is not None
+                and candle.timestamp >= entry_candle_ts
+                and candle.low <= updated.stop_price
+            ):
+                self._sell(
+                    updated,
+                    timestamp,
+                    exit_price=updated.stop_price,
+                    exit_reason="stop",
+                )
+                sold = True
+                continue
             if candle.timestamp >= entry_candle_ts and candle.high >= updated.target_price:
                 self._sell(updated, timestamp)
                 sold = True
@@ -386,25 +432,49 @@ class LiveSimulator:
             last_alert_level=0.0,
             max_price=entry_price,
             min_price=entry_price,
+            entry_kind=setup.kind,
+            stop_price=setup.stop_price,
         )
         position = self.storage.open_position(position)
         expected_proceeds = quantity * target * (1 - self.config.strategy.fee_rate)
+        signal_name = "ложный пробой + возврат" if setup.kind == "reversal" else "отскок в диапазоне"
+        stop_line = (
+            f"Защитный стоп: {setup.stop_price:.4f} USDT\n"
+            if setup.stop_price is not None
+            else ""
+        )
+        setup_lines = (
+            f"Минимум ложного пробоя: {setup.support:.4f} USDT\n"
+            f"Максимум перед падением: {setup.resistance:.4f} USDT\n"
+            if setup.kind == "reversal"
+            else (
+                f"Поддержка диапазона: {setup.support:.4f} USDT\n"
+                f"Сопротивление диапазона: {setup.resistance:.4f} USDT\n"
+            )
+        )
+        confirmation_text = (
+            "Вход подтверждён возвратом после объёмного ложного пробоя. "
+            "При повторном снижении позиция будет закрыта по защитному стопу."
+            if setup.kind == "reversal"
+            else "Вход подтверждён отскоком в нижней части торгового диапазона. "
+                 "Если цена снизится, позиция останется открытой до восстановления."
+        )
         self._send(
             "🟢 ВИРТУАЛЬНАЯ ПОКУПКА\n\n"
             f"Позиция: #{position.id}\n"
             f"Время: {_time(position.entry_time)}\n"
+            f"Сигнал: {signal_name}\n"
             f"Цена: {entry_price:.4f} USDT\n"
             f"Количество: {quantity:.6f} {self.base_asset}\n"
             f"Рабочий капитал: {self.config.strategy.capital:.2f} USDT\n"
             f"Комиссия покупки: {buy_fee:.2f} USDT\n\n"
-            f"Поддержка диапазона: {setup.support:.4f} USDT\n"
-            f"Сопротивление диапазона: {setup.resistance:.4f} USDT\n"
+            f"{setup_lines}"
+            f"{stop_line}"
             f"Открытые позиции после покупки: {len(self.storage.positions())} / {self.config.strategy.max_open_positions}\n"
             f"Виртуальная продажа: {target:.4f} USDT (+{target - entry_price:.2f})\n"
             f"Ожидаемая валовая прибыль от движения цены: {quantity * (target - entry_price):.2f} USDT\n"
             f"Ожидаемая чистая прибыль: {expected_proceeds - self.config.strategy.capital:.2f} USDT\n\n"
-            "Вход подтверждён отскоком в нижней части торгового диапазона. "
-            "Если цена снизится, позиция останется открытой до восстановления.",
+            + confirmation_text,
             "buy",
         )
         return "bought"
@@ -438,9 +508,15 @@ class LiveSimulator:
                 try:
                     last_candle = int(self.storage.get("last_candle_ts", int(time.time())))
                     missing = max(0, int(time.time()) - last_candle) // self.period_seconds
+                    required_history = max(
+                        self.config.strategy.lookback,
+                        self.config.strategy.reversal_lookback
+                        if self.config.strategy.reversal_enabled
+                        else 0,
+                    )
                     fetch_size = min(
                         2000,
-                        max(200, self.config.strategy.lookback + 20, missing + 5),
+                        max(200, required_history + 20, missing + 5),
                     )
                     candles = fetch_htx_candles(self.config.symbol, self.config.period, fetch_size)
                     self.process_market(candles)
