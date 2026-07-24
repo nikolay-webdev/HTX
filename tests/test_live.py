@@ -175,33 +175,6 @@ class LiveSimulatorTests(unittest.TestCase):
         self.assertIsNone(self.storage.position())
         self.assertIn("Разница цены: +10.00 USDT", self.telegram.sent[-1])
 
-    def test_reversal_position_closes_at_protective_stop(self) -> None:
-        initial = [make_candle(0, 82), make_candle(1, 83), make_candle(2, 82)]
-        self.simulator.process_market(initial, initial[-1].timestamp + 60)
-        current = make_candle(3, 78, high=80.5, low=77.5)
-        self.storage.open_position(
-            StoredPosition(
-                current.timestamp,
-                80.0,
-                1.0,
-                3.6,
-                90.0,
-                0.0,
-                entry_kind="reversal",
-                stop_price=78.0,
-            )
-        )
-
-        result = self.simulator.process_market(initial + [current], current.timestamp + 30)
-
-        self.assertEqual(result, "sold")
-        self.assertIsNone(self.storage.position())
-        self.assertIn("ВИРТУАЛЬНЫЙ СТОП", self.telegram.sent[-1])
-        row = self.storage.connection.execute(
-            "SELECT entry_kind, exit_reason FROM trades"
-        ).fetchone()
-        self.assertEqual(tuple(row), ("reversal", "stop"))
-
     def test_only_authorized_chat_can_pause(self) -> None:
         self.telegram._updates = [
             {"update_id": 1, "message": {"chat": {"id": 999}, "text": "/pause"}},
@@ -328,9 +301,6 @@ class LiveSimulatorTests(unittest.TestCase):
         self.assertGreaterEqual(stats["reached_10"], 1)
         self.assertGreaterEqual(stats["best_max_move"], 10)
         self.assertLessEqual(stats["worst_min_move"], -4)
-        self.assertEqual(stats["range_count"], 1)
-        self.assertEqual(stats["reversal_count"], 0)
-        self.assertEqual(stats["stop_count"], 0)
         self.assertIn("Потенциал после входа", self.simulator.stats_text())
 
 

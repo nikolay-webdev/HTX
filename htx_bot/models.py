@@ -35,16 +35,6 @@ class StrategyConfig:
     touch_tolerance: float = 0.12
     min_net_profit_pct: float = 0.0035
     cooldown_candles: int = 0
-    reversal_enabled: bool = False
-    reversal_lookback: int = 60
-    reversal_confirmation_candles: int = 15
-    reversal_drop_pct: float = 0.004
-    reversal_rebound_pct: float = 0.0025
-    reversal_max_rebound_pct: float = 0.008
-    reversal_volume_lookback: int = 20
-    reversal_volume_multiplier: float = 2.0
-    reversal_stop_buffer_pct: float = 0.001
-    reversal_reward_risk: float = 2.0
 
 
 @dataclass
@@ -54,8 +44,6 @@ class Position:
     quantity: float
     buy_fee: float
     target_price: float
-    entry_kind: str = "range"
-    stop_price: float | None = None
 
 
 @dataclass(frozen=True)
@@ -68,8 +56,6 @@ class Trade:
     buy_fee: float
     sell_fee: float
     net_profit: float
-    entry_kind: str = "range"
-    exit_reason: str = "target"
 
     @property
     def holding_seconds(self) -> int:

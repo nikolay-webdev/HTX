@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from statistics import median
 from .models import BacktestResult, Candle, Position, StrategyConfig, Trade
 
 
@@ -31,8 +30,6 @@ class EntrySetup:
     entry_ceiling: float
     entry_price: float
     target_price: float
-    kind: str = "range"
-    stop_price: float | None = None
 
 
 def detect_range(window: list[Candle], config: StrategyConfig) -> RangeSignal | None:
@@ -72,7 +69,7 @@ def minimum_profitable_target(entry_price: float, config: StrategyConfig) -> flo
     return required_proceeds / (quantity * (1 - config.fee_rate))
 
 
-def detect_range_entry_setup(
+def detect_entry_setup(
     window: list[Candle],
     next_open: float,
     config: StrategyConfig,
@@ -108,86 +105,6 @@ def detect_range_entry_setup(
     )
 
 
-def detect_reversal_entry_setup(
-    window: list[Candle],
-    next_open: float,
-    config: StrategyConfig,
-) -> EntrySetup | None:
-    """Detect a high-volume flush followed by a confirmed rebound from its low."""
-    if not config.reversal_enabled or len(window) < config.reversal_lookback:
-        return None
-
-    analysis = window[-config.reversal_lookback:]
-    confirmation_start = len(analysis) - config.reversal_confirmation_candles
-    recent = analysis[confirmation_start:]
-    breakdown_offset = min(range(len(recent)), key=lambda index: recent[index].low)
-    breakdown_index = confirmation_start + breakdown_offset
-    breakdown = analysis[breakdown_index]
-
-    if breakdown_index < config.reversal_volume_lookback:
-        return None
-    history_before_breakdown = analysis[:breakdown_index]
-    if not history_before_breakdown:
-        return None
-
-    reference_high = max(candle.high for candle in history_before_breakdown)
-    drop_pct = 1 - breakdown.low / reference_high
-    if drop_pct < config.reversal_drop_pct:
-        return None
-
-    volume_window = analysis[
-        breakdown_index - config.reversal_volume_lookback:breakdown_index
-    ]
-    baseline_volume = median(candle.volume for candle in volume_window)
-    if baseline_volume <= 0:
-        return None
-    if breakdown.volume < baseline_volume * config.reversal_volume_multiplier:
-        return None
-
-    signal = analysis[-1]
-    if signal.close <= signal.open:
-        return None
-    rebound_pct = signal.close / breakdown.low - 1
-    if not config.reversal_rebound_pct <= rebound_pct <= config.reversal_max_rebound_pct:
-        return None
-    if signal.close <= breakdown.close:
-        return None
-
-    entry_price = next_open * (1 + config.slippage_rate)
-    target_price = max(
-        entry_price + config.target_price_delta,
-        minimum_profitable_target(entry_price, config),
-    )
-    stop_price = breakdown.low * (1 - config.reversal_stop_buffer_pct)
-    if stop_price >= entry_price:
-        return None
-    target_price = max(
-        target_price,
-        entry_price + (entry_price - stop_price) * config.reversal_reward_risk,
-    )
-
-    return EntrySetup(
-        support=breakdown.low,
-        resistance=reference_high,
-        entry_ceiling=signal.close,
-        entry_price=entry_price,
-        target_price=target_price,
-        kind="reversal",
-        stop_price=stop_price,
-    )
-
-
-def detect_entry_setup(
-    window: list[Candle],
-    next_open: float,
-    config: StrategyConfig,
-) -> EntrySetup | None:
-    range_setup = detect_range_entry_setup(window, next_open, config)
-    if range_setup is not None:
-        return range_setup
-    return detect_reversal_entry_setup(window, next_open, config)
-
-
 def run_backtest(candles: list[Candle], config: StrategyConfig) -> BacktestResult:
     if len(candles) < 2:
         raise ValueError("Нужно не меньше двух свечей")
@@ -214,40 +131,23 @@ def run_backtest(candles: list[Candle], config: StrategyConfig) -> BacktestResul
                 buy_fee = config.capital * config.fee_rate
                 quantity = (config.capital - buy_fee) / entry_price
                 target = setup.target_price
-                position = Position(
-                    candle.timestamp,
-                    entry_price,
-                    quantity,
-                    buy_fee,
-                    target,
-                    setup.kind,
-                    setup.stop_price,
-                )
+                position = Position(candle.timestamp, entry_price, quantity, buy_fee, target)
 
         if position is not None:
             exposure_seconds += interval
-            exit_price: float | None = None
-            exit_reason = "target"
-            if position.stop_price is not None and candle.low <= position.stop_price:
-                exit_price = position.stop_price
-                exit_reason = "stop"
-            elif candle.high >= position.target_price:
-                exit_price = position.target_price
-            if exit_price is not None:
-                proceeds = position.quantity * exit_price
+            if candle.high >= position.target_price:
+                proceeds = position.quantity * position.target_price
                 sell_fee = proceeds * config.fee_rate
                 net = proceeds - sell_fee - config.capital
                 trades.append(Trade(
                     entry_time=position.entry_time,
                     exit_time=candle.timestamp,
                     entry_price=position.entry_price,
-                    exit_price=exit_price,
+                    exit_price=position.target_price,
                     quantity=position.quantity,
                     buy_fee=position.buy_fee,
                     sell_fee=sell_fee,
                     net_profit=net,
-                    entry_kind=position.entry_kind,
-                    exit_reason=exit_reason,
                 ))
                 realized += net
                 position = None
