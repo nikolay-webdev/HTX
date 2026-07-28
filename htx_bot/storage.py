@@ -241,25 +241,35 @@ class Storage:
 
     def stats(self) -> dict[str, float | int]:
         row = self.connection.execute(
-            """SELECT COALESCE(SUM(CASE WHEN entry_kind IN ('range', 'reversal_hold') THEN 1 ELSE 0 END), 0) count,
-                      COALESCE(SUM(CASE WHEN entry_kind IN ('range', 'reversal_hold') THEN net_profit ELSE 0 END), 0) profit,
-                      COALESCE(AVG(CASE WHEN entry_kind IN ('range', 'reversal_hold') THEN net_profit END), 0) average,
-                      COALESCE(SUM(CASE WHEN entry_kind IN ('range', 'reversal_hold') AND net_profit > 0 THEN 1 ELSE 0 END), 0) wins,
-                      COALESCE(AVG(CASE WHEN entry_kind IN ('range', 'reversal_hold') THEN COALESCE(max_price, exit_price) - entry_price END), 0) avg_max_move,
-                      COALESCE(MAX(CASE WHEN entry_kind IN ('range', 'reversal_hold') THEN COALESCE(max_price, exit_price) - entry_price END), 0) best_max_move,
-                      COALESCE(AVG(CASE WHEN entry_kind IN ('range', 'reversal_hold') THEN COALESCE(min_price, entry_price) - entry_price END), 0) avg_min_move,
-                      COALESCE(MIN(CASE WHEN entry_kind IN ('range', 'reversal_hold') THEN COALESCE(min_price, entry_price) - entry_price END), 0) worst_min_move,
-                      COALESCE(SUM(CASE WHEN entry_kind IN ('range', 'reversal_hold') AND COALESCE(max_price, exit_price) - entry_price >= 10 THEN 1 ELSE 0 END), 0) reached_10,
-                      COALESCE(SUM(CASE WHEN entry_kind IN ('range', 'reversal_hold') AND COALESCE(max_price, exit_price) - entry_price >= 15 THEN 1 ELSE 0 END), 0) reached_15,
-                      COALESCE(SUM(CASE WHEN entry_kind IN ('range', 'reversal_hold') AND COALESCE(max_price, exit_price) - entry_price >= 20 THEN 1 ELSE 0 END), 0) reached_20,
-                      COALESCE(SUM(CASE WHEN entry_kind IN ('range', 'reversal_hold') AND COALESCE(max_price, exit_price) - entry_price >= 25 THEN 1 ELSE 0 END), 0) reached_25,
+            """WITH classified AS (
+                   SELECT *,
+                          CASE
+                              WHEN entry_kind IN ('range', 'reversal_hold') THEN 1
+                              WHEN entry_kind = 'reversal' AND exit_reason = 'target' THEN 1
+                              ELSE 0
+                          END active
+                   FROM trades
+               )
+               SELECT COALESCE(SUM(CASE WHEN active = 1 THEN 1 ELSE 0 END), 0) count,
+                      COALESCE(SUM(CASE WHEN active = 1 THEN net_profit ELSE 0 END), 0) profit,
+                      COALESCE(AVG(CASE WHEN active = 1 THEN net_profit END), 0) average,
+                      COALESCE(SUM(CASE WHEN active = 1 AND net_profit > 0 THEN 1 ELSE 0 END), 0) wins,
+                      COALESCE(AVG(CASE WHEN active = 1 THEN COALESCE(max_price, exit_price) - entry_price END), 0) avg_max_move,
+                      COALESCE(MAX(CASE WHEN active = 1 THEN COALESCE(max_price, exit_price) - entry_price END), 0) best_max_move,
+                      COALESCE(AVG(CASE WHEN active = 1 THEN COALESCE(min_price, entry_price) - entry_price END), 0) avg_min_move,
+                      COALESCE(MIN(CASE WHEN active = 1 THEN COALESCE(min_price, entry_price) - entry_price END), 0) worst_min_move,
+                      COALESCE(SUM(CASE WHEN active = 1 AND COALESCE(max_price, exit_price) - entry_price >= 10 THEN 1 ELSE 0 END), 0) reached_10,
+                      COALESCE(SUM(CASE WHEN active = 1 AND COALESCE(max_price, exit_price) - entry_price >= 15 THEN 1 ELSE 0 END), 0) reached_15,
+                      COALESCE(SUM(CASE WHEN active = 1 AND COALESCE(max_price, exit_price) - entry_price >= 20 THEN 1 ELSE 0 END), 0) reached_20,
+                      COALESCE(SUM(CASE WHEN active = 1 AND COALESCE(max_price, exit_price) - entry_price >= 25 THEN 1 ELSE 0 END), 0) reached_25,
                       COALESCE(SUM(CASE WHEN entry_kind = 'range' THEN 1 ELSE 0 END), 0) range_count,
+                      COALESCE(SUM(CASE WHEN entry_kind IN ('reversal', 'reversal_hold') AND active = 1 THEN 1 ELSE 0 END), 0) reversal_target_count,
                       COALESCE(SUM(CASE WHEN entry_kind = 'reversal_hold' THEN 1 ELSE 0 END), 0) reversal_hold_count,
-                      COALESCE(SUM(CASE WHEN entry_kind NOT IN ('range', 'reversal_hold') THEN 1 ELSE 0 END), 0) archived_count,
-                      COALESCE(SUM(CASE WHEN entry_kind NOT IN ('range', 'reversal_hold') AND net_profit > 0 THEN 1 ELSE 0 END), 0) archived_wins,
-                      COALESCE(SUM(CASE WHEN entry_kind NOT IN ('range', 'reversal_hold') THEN net_profit ELSE 0 END), 0) archived_profit,
-                      COALESCE(SUM(CASE WHEN entry_kind NOT IN ('range', 'reversal_hold') AND exit_reason = 'stop' THEN 1 ELSE 0 END), 0) archived_stops
-               FROM trades"""
+                      COALESCE(SUM(CASE WHEN active = 0 THEN 1 ELSE 0 END), 0) archived_count,
+                      COALESCE(SUM(CASE WHEN active = 0 AND net_profit > 0 THEN 1 ELSE 0 END), 0) archived_wins,
+                      COALESCE(SUM(CASE WHEN active = 0 THEN net_profit ELSE 0 END), 0) archived_profit,
+                      COALESCE(SUM(CASE WHEN active = 0 AND exit_reason = 'stop' THEN 1 ELSE 0 END), 0) archived_stops
+               FROM classified"""
         ).fetchone()
         return dict(row)
 

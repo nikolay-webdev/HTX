@@ -350,21 +350,30 @@ class LiveSimulatorTests(unittest.TestCase):
                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (500, 600, 100.0, 110.0, 1.0, 3.6, 3.6, 6.3, 111.0, 88.0, "reversal_hold", "target"),
         )
+        self.storage.connection.execute(
+            """INSERT INTO trades(
+                   entry_time, exit_time, entry_price, exit_price, quantity,
+                   buy_fee, sell_fee, net_profit, max_price, min_price,
+                   entry_kind, exit_reason
+               ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (700, 800, 100.0, 112.0, 1.0, 3.6, 3.6, 7.0, 113.0, 96.0, "reversal", "target"),
+        )
         self.storage.connection.commit()
 
         stats = self.storage.stats()
-        self.assertEqual(stats["count"], 2)
-        self.assertAlmostEqual(stats["profit"], 9.1)
+        self.assertEqual(stats["count"], 3)
+        self.assertAlmostEqual(stats["profit"], 16.1)
         self.assertEqual(stats["range_count"], 1)
         self.assertEqual(stats["reversal_hold_count"], 1)
+        self.assertEqual(stats["reversal_target_count"], 2)
         self.assertEqual(stats["archived_count"], 1)
         self.assertEqual(stats["archived_stops"], 1)
         self.assertAlmostEqual(stats["archived_profit"], -17.2)
 
         report = self.simulator.stats_text()
         self.assertIn("СТАТИСТИКА ТЕКУЩЕЙ СТРАТЕГИИ", report)
-        self.assertIn("АРХИВ ЭКСПЕРИМЕНТАЛЬНОЙ СТРАТЕГИИ", report)
-        self.assertIn("Архивный P&L: -17.20 USDT", report)
+        self.assertIn("АРХИВ СТАРЫХ СТОПОВ", report)
+        self.assertIn("Зафиксированный тогда P&L: -17.20 USDT", report)
 
 
 if __name__ == "__main__":

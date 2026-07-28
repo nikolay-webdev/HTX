@@ -199,7 +199,7 @@ class LiveSimulator:
             f"Реализованный P&L: {stats['profit']:.2f} USDT\n"
             f"Средняя сделка: {stats['average']:.2f} USDT\n"
             f"Сделки диапазона: {stats['range_count']}\n"
-            f"Reversal без стопа: {stats['reversal_hold_count']}\n"
+            f"Reversal, закрытые по прибыльной цели: {stats['reversal_target_count']}\n"
             f"Максимальная открытая просадка (вся история): {abs(float(self.storage.get('max_drawdown', 0.0))):.2f} USDT\n\n"
             "Потенциал после входа:\n"
             f"Средний максимум после покупки: +{stats['avg_max_move']:.2f} USDT\n"
@@ -215,12 +215,10 @@ class LiveSimulator:
         )
         if int(stats["archived_count"]):
             text += (
-                "\n\n🗄 АРХИВ ЭКСПЕРИМЕНТАЛЬНОЙ СТРАТЕГИИ\n"
-                "Не учитывается в показателях выше.\n"
-                f"Сделок: {stats['archived_count']}\n"
-                f"Прибыльных: {stats['archived_wins']}\n"
+                "\n\n🗄 АРХИВ СТАРЫХ СТОПОВ\n"
+                "Не учитывается в показателях безстоповой стратегии выше.\n"
                 f"Закрытий по стопу: {stats['archived_stops']}\n"
-                f"Архивный P&L: {stats['archived_profit']:.2f} USDT"
+                f"Зафиксированный тогда P&L: {stats['archived_profit']:.2f} USDT"
             )
         return text
 
