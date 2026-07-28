@@ -303,6 +303,37 @@ class LiveSimulatorTests(unittest.TestCase):
         self.assertLessEqual(stats["worst_min_move"], -4)
         self.assertIn("Потенциал после входа", self.simulator.stats_text())
 
+    def test_stats_separate_archived_reversal_trades(self) -> None:
+        self.storage.connection.execute(
+            """INSERT INTO trades(
+                   entry_time, exit_time, entry_price, exit_price, quantity,
+                   buy_fee, sell_fee, net_profit, max_price, min_price,
+                   entry_kind, exit_reason
+               ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (100, 200, 100.0, 90.0, 1.0, 3.6, 3.6, -17.2, 101.0, 90.0, "reversal", "stop"),
+        )
+        self.storage.connection.execute(
+            """INSERT INTO trades(
+                   entry_time, exit_time, entry_price, exit_price, quantity,
+                   buy_fee, sell_fee, net_profit, max_price, min_price,
+                   entry_kind, exit_reason
+               ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (300, 400, 100.0, 110.0, 1.0, 3.6, 3.6, 2.8, 112.0, 99.0, "range", "target"),
+        )
+        self.storage.connection.commit()
+
+        stats = self.storage.stats()
+        self.assertEqual(stats["count"], 1)
+        self.assertAlmostEqual(stats["profit"], 2.8)
+        self.assertEqual(stats["archived_count"], 1)
+        self.assertEqual(stats["archived_stops"], 1)
+        self.assertAlmostEqual(stats["archived_profit"], -17.2)
+
+        report = self.simulator.stats_text()
+        self.assertIn("СТАТИСТИКА ТЕКУЩЕЙ СТРАТЕГИИ", report)
+        self.assertIn("АРХИВ ЭКСПЕРИМЕНТАЛЬНОЙ СТРАТЕГИИ", report)
+        self.assertIn("Архивный P&L: -17.20 USDT", report)
+
 
 if __name__ == "__main__":
     unittest.main()

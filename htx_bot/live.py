@@ -183,13 +183,14 @@ class LiveSimulator:
     def stats_text(self) -> str:
         stats = self.storage.stats()
         count = max(1, int(stats["count"]))
-        return (
-            "📈 СТАТИСТИКА СИМУЛЯТОРА\n\n"
+        text = (
+            "📈 СТАТИСТИКА ТЕКУЩЕЙ СТРАТЕГИИ\n"
+            "Без стопов — позиции удерживаются до цели.\n\n"
             f"Завершённых сделок: {stats['count']}\n"
             f"Прибыльных: {stats['wins']}\n"
             f"Реализованный P&L: {stats['profit']:.2f} USDT\n"
             f"Средняя сделка: {stats['average']:.2f} USDT\n"
-            f"Максимальная открытая просадка: {abs(float(self.storage.get('max_drawdown', 0.0))):.2f} USDT\n\n"
+            f"Максимальная открытая просадка (вся история): {abs(float(self.storage.get('max_drawdown', 0.0))):.2f} USDT\n\n"
             "Потенциал после входа:\n"
             f"Средний максимум после покупки: +{stats['avg_max_move']:.2f} USDT\n"
             f"Лучший максимум после покупки: +{stats['best_max_move']:.2f} USDT\n"
@@ -202,6 +203,16 @@ class LiveSimulator:
             f"+25 USDT: {stats['reached_25']} из {stats['count']} ({int(stats['reached_25']) / count * 100:.0f}%)\n\n"
             f"Рекомендация: {_target_recommendation(stats)}"
         )
+        if int(stats["archived_count"]):
+            text += (
+                "\n\n🗄 АРХИВ ЭКСПЕРИМЕНТАЛЬНОЙ СТРАТЕГИИ\n"
+                "Не учитывается в показателях выше.\n"
+                f"Сделок: {stats['archived_count']}\n"
+                f"Прибыльных: {stats['archived_wins']}\n"
+                f"Закрытий по стопу: {stats['archived_stops']}\n"
+                f"Архивный P&L: {stats['archived_profit']:.2f} USDT"
+            )
+        return text
 
     def handle_commands(self) -> None:
         offset = self.storage.get("telegram_offset")

@@ -69,6 +69,10 @@ class Storage:
         self._add_column("position", "min_price", "REAL")
         self._add_column("trades", "max_price", "REAL")
         self._add_column("trades", "min_price", "REAL")
+        # Keep strategy metadata so experiments can remain in the database
+        # without affecting the statistics for the active range strategy.
+        self._add_column("trades", "entry_kind", "TEXT NOT NULL DEFAULT 'range'")
+        self._add_column("trades", "exit_reason", "TEXT NOT NULL DEFAULT 'target'")
         self.connection.commit()
 
     def _migrate_single_position_table(self) -> None:
@@ -229,18 +233,22 @@ class Storage:
 
     def stats(self) -> dict[str, float | int]:
         row = self.connection.execute(
-            """SELECT COUNT(*) count,
-                      COALESCE(SUM(net_profit), 0) profit,
-                      COALESCE(AVG(net_profit), 0) average,
-                      COALESCE(SUM(CASE WHEN net_profit > 0 THEN 1 ELSE 0 END), 0) wins,
-                      COALESCE(AVG(COALESCE(max_price, exit_price) - entry_price), 0) avg_max_move,
-                      COALESCE(MAX(COALESCE(max_price, exit_price) - entry_price), 0) best_max_move,
-                      COALESCE(AVG(COALESCE(min_price, entry_price) - entry_price), 0) avg_min_move,
-                      COALESCE(MIN(COALESCE(min_price, entry_price) - entry_price), 0) worst_min_move,
-                      COALESCE(SUM(CASE WHEN COALESCE(max_price, exit_price) - entry_price >= 10 THEN 1 ELSE 0 END), 0) reached_10,
-                      COALESCE(SUM(CASE WHEN COALESCE(max_price, exit_price) - entry_price >= 15 THEN 1 ELSE 0 END), 0) reached_15,
-                      COALESCE(SUM(CASE WHEN COALESCE(max_price, exit_price) - entry_price >= 20 THEN 1 ELSE 0 END), 0) reached_20,
-                      COALESCE(SUM(CASE WHEN COALESCE(max_price, exit_price) - entry_price >= 25 THEN 1 ELSE 0 END), 0) reached_25
+            """SELECT COALESCE(SUM(CASE WHEN entry_kind = 'range' THEN 1 ELSE 0 END), 0) count,
+                      COALESCE(SUM(CASE WHEN entry_kind = 'range' THEN net_profit ELSE 0 END), 0) profit,
+                      COALESCE(AVG(CASE WHEN entry_kind = 'range' THEN net_profit END), 0) average,
+                      COALESCE(SUM(CASE WHEN entry_kind = 'range' AND net_profit > 0 THEN 1 ELSE 0 END), 0) wins,
+                      COALESCE(AVG(CASE WHEN entry_kind = 'range' THEN COALESCE(max_price, exit_price) - entry_price END), 0) avg_max_move,
+                      COALESCE(MAX(CASE WHEN entry_kind = 'range' THEN COALESCE(max_price, exit_price) - entry_price END), 0) best_max_move,
+                      COALESCE(AVG(CASE WHEN entry_kind = 'range' THEN COALESCE(min_price, entry_price) - entry_price END), 0) avg_min_move,
+                      COALESCE(MIN(CASE WHEN entry_kind = 'range' THEN COALESCE(min_price, entry_price) - entry_price END), 0) worst_min_move,
+                      COALESCE(SUM(CASE WHEN entry_kind = 'range' AND COALESCE(max_price, exit_price) - entry_price >= 10 THEN 1 ELSE 0 END), 0) reached_10,
+                      COALESCE(SUM(CASE WHEN entry_kind = 'range' AND COALESCE(max_price, exit_price) - entry_price >= 15 THEN 1 ELSE 0 END), 0) reached_15,
+                      COALESCE(SUM(CASE WHEN entry_kind = 'range' AND COALESCE(max_price, exit_price) - entry_price >= 20 THEN 1 ELSE 0 END), 0) reached_20,
+                      COALESCE(SUM(CASE WHEN entry_kind = 'range' AND COALESCE(max_price, exit_price) - entry_price >= 25 THEN 1 ELSE 0 END), 0) reached_25,
+                      COALESCE(SUM(CASE WHEN entry_kind != 'range' THEN 1 ELSE 0 END), 0) archived_count,
+                      COALESCE(SUM(CASE WHEN entry_kind != 'range' AND net_profit > 0 THEN 1 ELSE 0 END), 0) archived_wins,
+                      COALESCE(SUM(CASE WHEN entry_kind != 'range' THEN net_profit ELSE 0 END), 0) archived_profit,
+                      COALESCE(SUM(CASE WHEN entry_kind != 'range' AND exit_reason = 'stop' THEN 1 ELSE 0 END), 0) archived_stops
                FROM trades"""
         ).fetchone()
         return dict(row)
