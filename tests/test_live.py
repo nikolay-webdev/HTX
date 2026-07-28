@@ -175,6 +175,28 @@ class LiveSimulatorTests(unittest.TestCase):
         self.assertIsNone(self.storage.position())
         self.assertIn("Разница цены: +10.00 USDT", self.telegram.sent[-1])
 
+    def test_reversal_hold_position_is_not_sold_during_drawdown(self) -> None:
+        initial = [make_candle(0, 82), make_candle(1, 83), make_candle(2, 82)]
+        self.simulator.process_market(initial, initial[-1].timestamp + 60)
+        current = make_candle(3, 70, high=79.0, low=69.0)
+        self.storage.open_position(
+            StoredPosition(
+                current.timestamp,
+                80.0,
+                1.0,
+                3.6,
+                90.0,
+                0.0,
+                entry_kind="reversal_hold",
+            )
+        )
+
+        result = self.simulator.process_market(initial + [current], current.timestamp + 30)
+
+        self.assertEqual(result, "holding")
+        self.assertIsNotNone(self.storage.position())
+        self.assertEqual(self.storage.stats()["count"], 0)
+
     def test_only_authorized_chat_can_pause(self) -> None:
         self.telegram._updates = [
             {"update_id": 1, "message": {"chat": {"id": 999}, "text": "/pause"}},
@@ -320,11 +342,21 @@ class LiveSimulatorTests(unittest.TestCase):
                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (300, 400, 100.0, 110.0, 1.0, 3.6, 3.6, 2.8, 112.0, 99.0, "range", "target"),
         )
+        self.storage.connection.execute(
+            """INSERT INTO trades(
+                   entry_time, exit_time, entry_price, exit_price, quantity,
+                   buy_fee, sell_fee, net_profit, max_price, min_price,
+                   entry_kind, exit_reason
+               ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (500, 600, 100.0, 110.0, 1.0, 3.6, 3.6, 6.3, 111.0, 88.0, "reversal_hold", "target"),
+        )
         self.storage.connection.commit()
 
         stats = self.storage.stats()
-        self.assertEqual(stats["count"], 1)
-        self.assertAlmostEqual(stats["profit"], 2.8)
+        self.assertEqual(stats["count"], 2)
+        self.assertAlmostEqual(stats["profit"], 9.1)
+        self.assertEqual(stats["range_count"], 1)
+        self.assertEqual(stats["reversal_hold_count"], 1)
         self.assertEqual(stats["archived_count"], 1)
         self.assertEqual(stats["archived_stops"], 1)
         self.assertAlmostEqual(stats["archived_profit"], -17.2)

@@ -17,6 +17,7 @@ class StoredPosition:
     max_price: float | None = None
     min_price: float | None = None
     id: int = 1
+    entry_kind: str = "range"
 
 
 class Storage:
@@ -43,7 +44,8 @@ class Storage:
                 quantity REAL NOT NULL,
                 buy_fee REAL NOT NULL,
                 target_price REAL NOT NULL,
-                last_alert_level REAL NOT NULL DEFAULT 0
+                last_alert_level REAL NOT NULL DEFAULT 0,
+                entry_kind TEXT NOT NULL DEFAULT 'range'
             );
             CREATE TABLE IF NOT EXISTS trades (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,6 +69,7 @@ class Storage:
         self._migrate_single_position_table()
         self._add_column("position", "max_price", "REAL")
         self._add_column("position", "min_price", "REAL")
+        self._add_column("position", "entry_kind", "TEXT NOT NULL DEFAULT 'range'")
         self._add_column("trades", "max_price", "REAL")
         self._add_column("trades", "min_price", "REAL")
         # Keep strategy metadata so experiments can remain in the database
@@ -136,6 +139,7 @@ class Storage:
             max_price=row["max_price"] if row["max_price"] is not None else row["entry_price"],
             min_price=row["min_price"] if row["min_price"] is not None else row["entry_price"],
             id=row["id"],
+            entry_kind=row["entry_kind"],
         )
 
     def positions(self) -> list[StoredPosition]:
@@ -153,8 +157,8 @@ class Storage:
             cursor = self.connection.execute(
                 """INSERT INTO position(
                     entry_time, entry_price, quantity, buy_fee,
-                    target_price, last_alert_level, max_price, min_price
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)""",
+                    target_price, last_alert_level, max_price, min_price, entry_kind
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     position.entry_time,
                     position.entry_price,
@@ -164,6 +168,7 @@ class Storage:
                     position.last_alert_level,
                     position.max_price if position.max_price is not None else position.entry_price,
                     position.min_price if position.min_price is not None else position.entry_price,
+                    position.entry_kind,
                 ),
             )
             position_id = int(cursor.lastrowid)
@@ -177,6 +182,7 @@ class Storage:
             max_price=position.max_price if position.max_price is not None else position.entry_price,
             min_price=position.min_price if position.min_price is not None else position.entry_price,
             id=position_id,
+            entry_kind=position.entry_kind,
         )
 
     def set_alert_level(self, position_id: int, level: float) -> None:
@@ -210,6 +216,7 @@ class Storage:
             max_price=max_price,
             min_price=min_price,
             id=position.id,
+            entry_kind=position.entry_kind,
         )
 
     def close_position(self, position_id: int, exit_time: int, exit_price: float, sell_fee: float, net_profit: float) -> None:
@@ -220,35 +227,38 @@ class Storage:
             self.connection.execute(
                 """INSERT INTO trades(
                     entry_time, exit_time, entry_price, exit_price, quantity,
-                    buy_fee, sell_fee, net_profit, max_price, min_price
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    buy_fee, sell_fee, net_profit, max_price, min_price, entry_kind
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     row["entry_time"], exit_time, row["entry_price"], exit_price,
                     row["quantity"], row["buy_fee"], sell_fee, net_profit,
                     row["max_price"] if row["max_price"] is not None else max(row["entry_price"], exit_price),
                     row["min_price"] if row["min_price"] is not None else min(row["entry_price"], exit_price),
+                    row["entry_kind"],
                 ),
             )
             self.connection.execute("DELETE FROM position WHERE id = ?", (position_id,))
 
     def stats(self) -> dict[str, float | int]:
         row = self.connection.execute(
-            """SELECT COALESCE(SUM(CASE WHEN entry_kind = 'range' THEN 1 ELSE 0 END), 0) count,
-                      COALESCE(SUM(CASE WHEN entry_kind = 'range' THEN net_profit ELSE 0 END), 0) profit,
-                      COALESCE(AVG(CASE WHEN entry_kind = 'range' THEN net_profit END), 0) average,
-                      COALESCE(SUM(CASE WHEN entry_kind = 'range' AND net_profit > 0 THEN 1 ELSE 0 END), 0) wins,
-                      COALESCE(AVG(CASE WHEN entry_kind = 'range' THEN COALESCE(max_price, exit_price) - entry_price END), 0) avg_max_move,
-                      COALESCE(MAX(CASE WHEN entry_kind = 'range' THEN COALESCE(max_price, exit_price) - entry_price END), 0) best_max_move,
-                      COALESCE(AVG(CASE WHEN entry_kind = 'range' THEN COALESCE(min_price, entry_price) - entry_price END), 0) avg_min_move,
-                      COALESCE(MIN(CASE WHEN entry_kind = 'range' THEN COALESCE(min_price, entry_price) - entry_price END), 0) worst_min_move,
-                      COALESCE(SUM(CASE WHEN entry_kind = 'range' AND COALESCE(max_price, exit_price) - entry_price >= 10 THEN 1 ELSE 0 END), 0) reached_10,
-                      COALESCE(SUM(CASE WHEN entry_kind = 'range' AND COALESCE(max_price, exit_price) - entry_price >= 15 THEN 1 ELSE 0 END), 0) reached_15,
-                      COALESCE(SUM(CASE WHEN entry_kind = 'range' AND COALESCE(max_price, exit_price) - entry_price >= 20 THEN 1 ELSE 0 END), 0) reached_20,
-                      COALESCE(SUM(CASE WHEN entry_kind = 'range' AND COALESCE(max_price, exit_price) - entry_price >= 25 THEN 1 ELSE 0 END), 0) reached_25,
-                      COALESCE(SUM(CASE WHEN entry_kind != 'range' THEN 1 ELSE 0 END), 0) archived_count,
-                      COALESCE(SUM(CASE WHEN entry_kind != 'range' AND net_profit > 0 THEN 1 ELSE 0 END), 0) archived_wins,
-                      COALESCE(SUM(CASE WHEN entry_kind != 'range' THEN net_profit ELSE 0 END), 0) archived_profit,
-                      COALESCE(SUM(CASE WHEN entry_kind != 'range' AND exit_reason = 'stop' THEN 1 ELSE 0 END), 0) archived_stops
+            """SELECT COALESCE(SUM(CASE WHEN entry_kind IN ('range', 'reversal_hold') THEN 1 ELSE 0 END), 0) count,
+                      COALESCE(SUM(CASE WHEN entry_kind IN ('range', 'reversal_hold') THEN net_profit ELSE 0 END), 0) profit,
+                      COALESCE(AVG(CASE WHEN entry_kind IN ('range', 'reversal_hold') THEN net_profit END), 0) average,
+                      COALESCE(SUM(CASE WHEN entry_kind IN ('range', 'reversal_hold') AND net_profit > 0 THEN 1 ELSE 0 END), 0) wins,
+                      COALESCE(AVG(CASE WHEN entry_kind IN ('range', 'reversal_hold') THEN COALESCE(max_price, exit_price) - entry_price END), 0) avg_max_move,
+                      COALESCE(MAX(CASE WHEN entry_kind IN ('range', 'reversal_hold') THEN COALESCE(max_price, exit_price) - entry_price END), 0) best_max_move,
+                      COALESCE(AVG(CASE WHEN entry_kind IN ('range', 'reversal_hold') THEN COALESCE(min_price, entry_price) - entry_price END), 0) avg_min_move,
+                      COALESCE(MIN(CASE WHEN entry_kind IN ('range', 'reversal_hold') THEN COALESCE(min_price, entry_price) - entry_price END), 0) worst_min_move,
+                      COALESCE(SUM(CASE WHEN entry_kind IN ('range', 'reversal_hold') AND COALESCE(max_price, exit_price) - entry_price >= 10 THEN 1 ELSE 0 END), 0) reached_10,
+                      COALESCE(SUM(CASE WHEN entry_kind IN ('range', 'reversal_hold') AND COALESCE(max_price, exit_price) - entry_price >= 15 THEN 1 ELSE 0 END), 0) reached_15,
+                      COALESCE(SUM(CASE WHEN entry_kind IN ('range', 'reversal_hold') AND COALESCE(max_price, exit_price) - entry_price >= 20 THEN 1 ELSE 0 END), 0) reached_20,
+                      COALESCE(SUM(CASE WHEN entry_kind IN ('range', 'reversal_hold') AND COALESCE(max_price, exit_price) - entry_price >= 25 THEN 1 ELSE 0 END), 0) reached_25,
+                      COALESCE(SUM(CASE WHEN entry_kind = 'range' THEN 1 ELSE 0 END), 0) range_count,
+                      COALESCE(SUM(CASE WHEN entry_kind = 'reversal_hold' THEN 1 ELSE 0 END), 0) reversal_hold_count,
+                      COALESCE(SUM(CASE WHEN entry_kind NOT IN ('range', 'reversal_hold') THEN 1 ELSE 0 END), 0) archived_count,
+                      COALESCE(SUM(CASE WHEN entry_kind NOT IN ('range', 'reversal_hold') AND net_profit > 0 THEN 1 ELSE 0 END), 0) archived_wins,
+                      COALESCE(SUM(CASE WHEN entry_kind NOT IN ('range', 'reversal_hold') THEN net_profit ELSE 0 END), 0) archived_profit,
+                      COALESCE(SUM(CASE WHEN entry_kind NOT IN ('range', 'reversal_hold') AND exit_reason = 'stop' THEN 1 ELSE 0 END), 0) archived_stops
                FROM trades"""
         ).fetchone()
         return dict(row)

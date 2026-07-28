@@ -88,8 +88,14 @@ class LiveSimulator:
         max_move = (position.max_price or position.entry_price) - position.entry_price
         min_move = (position.min_price or position.entry_price) - position.entry_price
         header = title or f"📌 ПОЗИЦИЯ #{position.id}"
+        signal_name = (
+            "ложный пробой + удержание"
+            if position.entry_kind == "reversal_hold"
+            else "отскок в диапазоне"
+        )
         return (
             f"{header}\n"
+            f"Сигнал входа: {signal_name}\n"
             f"Цена покупки: {position.entry_price:.4f} USDT\n"
             f"Количество: {position.quantity:.6f} {self.base_asset}\n"
             f"Текущая цена: {price:.4f} USDT\n"
@@ -127,8 +133,10 @@ class LiveSimulator:
             f"Цель продажи: цена покупки + {self.config.strategy.target_price_delta:.2f} USDT\n"
             f"Проверка рынка: каждые {self.config.poll_seconds:g} сек.\n"
             f"Комиссия: {self.config.strategy.fee_rate * 100:.3f}% за операцию\n"
+            f"Reversal без стопа: {'включён' if self.config.strategy.reversal_enabled else 'выключен'}\n"
             f"Статус: {state}\n\n"
-            "Цикл: найти диапазон → подтвердить отскок → купить → дождаться цели.\n"
+            "Входы: отскок в диапазоне или объёмный ложный пробой с возвратом.\n"
+            "После покупки стопа нет: позиция удерживается до прибыльной цели.\n"
             "Реальные ордера и HTX API-ключи не используются.\n"
             "Команды: /status /position /current_market_price /stats /pause /resume /help"
         )
@@ -190,6 +198,8 @@ class LiveSimulator:
             f"Прибыльных: {stats['wins']}\n"
             f"Реализованный P&L: {stats['profit']:.2f} USDT\n"
             f"Средняя сделка: {stats['average']:.2f} USDT\n"
+            f"Сделки диапазона: {stats['range_count']}\n"
+            f"Reversal без стопа: {stats['reversal_hold_count']}\n"
             f"Максимальная открытая просадка (вся история): {abs(float(self.storage.get('max_drawdown', 0.0))):.2f} USDT\n\n"
             "Потенциал после входа:\n"
             f"Средний максимум после покупки: +{stats['avg_max_move']:.2f} USDT\n"
@@ -397,25 +407,40 @@ class LiveSimulator:
             last_alert_level=0.0,
             max_price=entry_price,
             min_price=entry_price,
+            entry_kind=setup.kind,
         )
         position = self.storage.open_position(position)
         expected_proceeds = quantity * target * (1 - self.config.strategy.fee_rate)
+        signal_name = (
+            "ложный пробой + возврат без стопа"
+            if setup.kind == "reversal_hold"
+            else "отскок в диапазоне"
+        )
+        setup_lines = (
+            f"Минимум ложного пробоя: {setup.support:.4f} USDT\n"
+            f"Максимум перед падением: {setup.resistance:.4f} USDT\n"
+            if setup.kind == "reversal_hold"
+            else (
+                f"Поддержка диапазона: {setup.support:.4f} USDT\n"
+                f"Сопротивление диапазона: {setup.resistance:.4f} USDT\n"
+            )
+        )
         self._send(
             "🟢 ВИРТУАЛЬНАЯ ПОКУПКА\n\n"
             f"Позиция: #{position.id}\n"
             f"Время: {_time(position.entry_time)}\n"
+            f"Сигнал: {signal_name}\n"
             f"Цена: {entry_price:.4f} USDT\n"
             f"Количество: {quantity:.6f} {self.base_asset}\n"
             f"Рабочий капитал: {self.config.strategy.capital:.2f} USDT\n"
             f"Комиссия покупки: {buy_fee:.2f} USDT\n\n"
-            f"Поддержка диапазона: {setup.support:.4f} USDT\n"
-            f"Сопротивление диапазона: {setup.resistance:.4f} USDT\n"
+            f"{setup_lines}"
             f"Открытые позиции после покупки: {len(self.storage.positions())} / {self.config.strategy.max_open_positions}\n"
             f"Виртуальная продажа: {target:.4f} USDT (+{target - entry_price:.2f})\n"
             f"Ожидаемая валовая прибыль от движения цены: {quantity * (target - entry_price):.2f} USDT\n"
             f"Ожидаемая чистая прибыль: {expected_proceeds - self.config.strategy.capital:.2f} USDT\n\n"
-            "Вход подтверждён отскоком в нижней части торгового диапазона. "
-            "Если цена снизится, позиция останется открытой до восстановления.",
+            "Стоп-лосса нет. Если цена снизится, позиция останется открытой "
+            "до восстановления и достижения прибыльной цели.",
             "buy",
         )
         return "bought"
@@ -449,9 +474,15 @@ class LiveSimulator:
                 try:
                     last_candle = int(self.storage.get("last_candle_ts", int(time.time())))
                     missing = max(0, int(time.time()) - last_candle) // self.period_seconds
+                    required_history = max(
+                        self.config.strategy.lookback,
+                        self.config.strategy.reversal_lookback
+                        if self.config.strategy.reversal_enabled
+                        else 0,
+                    )
                     fetch_size = min(
                         2000,
-                        max(200, self.config.strategy.lookback + 20, missing + 5),
+                        max(200, required_history + 20, missing + 5),
                     )
                     candles = fetch_htx_candles(self.config.symbol, self.config.period, fetch_size)
                     self.process_market(candles)
