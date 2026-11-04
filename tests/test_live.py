@@ -97,7 +97,7 @@ class LiveSimulatorTests(unittest.TestCase):
         self.assertIsNotNone(position)
         assert position is not None
         self.assertEqual(position.target_price, position.entry_price + 10)
-        self.assertIn("ВИРТУАЛЬНАЯ ПОКУПКА", self.telegram.sent[-1])
+        self.assertIn("VIRTUELLER KAUF", self.telegram.sent[-1])
         self.assertIn("ETH", self.telegram.sent[-1])
 
         sell = make_candle(5, 93, high=93)
@@ -108,7 +108,7 @@ class LiveSimulatorTests(unittest.TestCase):
         self.assertEqual(result, "sold")
         self.assertIsNone(self.storage.position())
         self.assertEqual(self.storage.stats()["count"], 1)
-        self.assertIn("ВИРТУАЛЬНАЯ ПРОДАЖА", self.telegram.sent[-1])
+        self.assertIn("VIRTUELLER VERKAUF", self.telegram.sent[-1])
 
     def test_second_lower_position_can_open_while_first_is_holding(self) -> None:
         initial = [
@@ -140,8 +140,8 @@ class LiveSimulatorTests(unittest.TestCase):
 
         self.assertEqual(result, "bought")
         self.assertEqual(len(self.storage.positions()), 2)
-        self.assertIn("Позиция: #2", self.telegram.sent[-1])
-        self.assertIn("Открытые позиции после покупки: 2 / 2", self.telegram.sent[-1])
+        self.assertIn("Position: #2", self.telegram.sent[-1])
+        self.assertIn("Offene Positionen nach dem Kauf: 2 / 2", self.telegram.sent[-1])
 
     def test_live_waits_when_last_candle_does_not_confirm_rebound(self) -> None:
         initial = [
@@ -173,7 +173,7 @@ class LiveSimulatorTests(unittest.TestCase):
 
         self.assertEqual(result, "sold")
         self.assertIsNone(self.storage.position())
-        self.assertIn("Разница цены: +10.00 USDT", self.telegram.sent[-1])
+        self.assertIn("Preisunterschied: +10.00 USDT", self.telegram.sent[-1])
 
     def test_reversal_hold_position_is_not_sold_during_drawdown(self) -> None:
         initial = [make_candle(0, 82), make_candle(1, 83), make_candle(2, 82)]
@@ -215,11 +215,11 @@ class LiveSimulatorTests(unittest.TestCase):
 
         text = self.simulator.status_text()
 
-        self.assertIn("Состояние: УДЕРЖАНИЕ", text)
-        self.assertIn("Цена покупки: 1805.5810 USDT", text)
-        self.assertIn("Текущая цена: 1738.7200 USDT", text)
-        self.assertIn("Ожидаемая цена продажи: 1815.5810 USDT", text)
-        self.assertIn("Текущий P&L:", text)
+        self.assertIn("Zustand: HALTEN", text)
+        self.assertIn("Kaufpreis: 1805.5810 USDT", text)
+        self.assertIn("Aktueller Preis: 1738.7200 USDT", text)
+        self.assertIn("Erwarteter Verkaufspreis: 1815.5810 USDT", text)
+        self.assertIn("Aktueller P&L:", text)
 
     def test_current_market_price_command(self) -> None:
         self.storage.set("last_price", 1738.72)
@@ -231,15 +231,15 @@ class LiveSimulatorTests(unittest.TestCase):
 
         self.simulator.handle_commands()
 
-        self.assertIn("ТЕКУЩАЯ РЫНОЧНАЯ ЦЕНА", self.telegram.sent[-1])
-        self.assertIn("Цена: 1738.7200 USDT", self.telegram.sent[-1])
+        self.assertIn("AKTUELLER MARKTPREIS", self.telegram.sent[-1])
+        self.assertIn("Preis: 1738.7200 USDT", self.telegram.sent[-1])
 
     def test_start_message_reports_restored_position_as_holding(self) -> None:
         self.storage.open_position(
             StoredPosition(1_700_000_000, 1805.581, 0.994915, 3.6, 1815.581, 0.0)
         )
 
-        self.assertIn("Статус: УДЕРЖАНИЕ", self.simulator.start_message())
+        self.assertIn("Status: HALTEN", self.simulator.start_message())
 
     def test_position_survives_database_reopen(self) -> None:
         expected = StoredPosition(100, 80.0, 6.2, 1.0, 82.0, 0.0, 80.0, 80.0)
@@ -323,7 +323,7 @@ class LiveSimulatorTests(unittest.TestCase):
         self.assertGreaterEqual(stats["reached_10"], 1)
         self.assertGreaterEqual(stats["best_max_move"], 10)
         self.assertLessEqual(stats["worst_min_move"], -4)
-        self.assertIn("Потенциал после входа", self.simulator.stats_text())
+        self.assertIn("Potenzial nach dem Einstieg", self.simulator.stats_text())
 
     def test_stats_separate_archived_reversal_trades(self) -> None:
         self.storage.connection.execute(
@@ -371,9 +371,9 @@ class LiveSimulatorTests(unittest.TestCase):
         self.assertAlmostEqual(stats["archived_profit"], -17.2)
 
         report = self.simulator.stats_text()
-        self.assertIn("СТАТИСТИКА ТЕКУЩЕЙ СТРАТЕГИИ", report)
-        self.assertIn("АРХИВ СТАРЫХ СТОПОВ", report)
-        self.assertIn("Зафиксированный тогда P&L: -17.20 USDT", report)
+        self.assertIn("STATISTIK DER AKTUELLEN STRATEGIE", report)
+        self.assertIn("ARCHIV ALTER STOP-LOSS-TRADES", report)
+        self.assertIn("Damals fixierter P&L: -17.20 USDT", report)
 
 
 if __name__ == "__main__":

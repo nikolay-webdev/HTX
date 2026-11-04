@@ -1,204 +1,165 @@
-# ETH/USDT spot simulator
+# HTX Telegram Bot
 
-Безопасный симулятор стратегии с двумя режимами:
+Python-basierter Telegram-Bot zur Analyse öffentlicher Marktdaten und zur Simulation virtueller Transaktionen.
 
-- исторический backtest;
-- постоянный live dry-run с публичными котировками HTX, SQLite и Telegram.
+Das Projekt demonstriert Python-Entwicklung, REST-API-Integration, Verarbeitung von JSON- und CSV-Daten, persistente Speicherung mit SQLite sowie den Betrieb eines Hintergrundprozesses unter Linux. Es handelt sich ausschließlich um eine Simulation: Es werden keine echten Orders gesendet und keine HTX-API-Schlüssel verwendet.
 
-HTX API-ключи не нужны и не поддерживаются. Программа физически не умеет отправлять реальные ордера.
+## Funktionen
 
-Он последовательно выполняет виртуальный spot-цикл: анализирует последние свечи, ищет горизонтальный диапазон либо объёмный ложный пробой вниз с подтверждённым возвратом и только после этого покупает ETH. Цель начинается с 10 USDT выше фактической цены покупки, но автоматически увеличивается, если этого недостаточно для покрытия обеих комиссий и минимальной чистой доходности. Стоп-лосса нет для обоих типов входа: если цена падает, позиция сохраняется до восстановления и явно показывается в отчёте.
+- Abruf öffentlicher Candlestick-Daten über die HTX REST API
+- historischer Backtest mit CSV-Daten
+- kontinuierlicher Live-Dry-Run mit Telegram-Benachrichtigungen
+- virtuelle Positionen und statistische Auswertung
+- persistenter Zustand in SQLite mit Wiederherstellung nach Neustart
+- kontrollierte Wiederholungen bei temporären Netzwerkfehlern
+- optionaler Betrieb als systemd-Service auf einem Linux-VPS
 
-Новая виртуальная покупка возможна только после закрытия подтверждающей зелёной свечи, если позиции ещё нет. Сильный направленный тренд, слишком узкий диапазон, цена выше зоны входа или цель выше сопротивления блокируют покупку. Открытая позиция и касание цели проверяются каждые 10 секунд по текущей минутной свече, включая её `high`, поэтому краткое касание цели между опросами не теряется. В реальной торговле эту роль позднее будет выполнять заранее размещённый лимитный ордер на бирже.
+Die vorhandene Simulationslogik dient als Beispiel für anwendungsbezogene Geschäftslogik. Das Projekt ist kein System für reale Handelsausführung und keine Aussage über finanzielle Ergebnisse.
 
-## Быстрый запуск
+## Technologien
 
-Требуется Python 3.11+; внешних библиотек нет.
+| Technologie | Verwendung |
+|---|---|
+| Python 3.11+ | Anwendungslogik und CLI |
+| Telegram Bot API | Benutzerinteraktion und Benachrichtigungen |
+| HTX REST API | Abruf öffentlicher Marktdaten |
+| JSON | Verarbeitung der API-Antworten |
+| SQLite | Persistenter Zustand und Simulationsergebnisse |
+| CSV | Import historischer Candlestick-Daten |
+| Linux / systemd | Dauerbetrieb und automatischer Neustart |
+| Git | Versionsverwaltung |
+| unittest | Automatisierte Tests |
+
+## Architektur
+
+```text
+Telegram-Benutzer
+        ↕
+Telegram Bot API
+        ↕
+Python-Anwendung
+   ↙          ↘
+HTX REST API   SQLite-Datenbank
+```
+
+Die Telegram-Schicht nimmt Befehle entgegen und sendet Antworten. Die Daten-Schicht lädt und validiert Marktdaten. Die Simulationslogik verarbeitet diese Daten, während SQLite Zustand, Positionen, Ereignisse und Ergebnisse dauerhaft speichert.
+
+## Projektstruktur
+
+| Pfad | Verantwortung |
+|---|---|
+| `htx_bot/telegram.py` | Kommunikation mit der Telegram Bot API |
+| `htx_bot/data.py` | HTX-Datenabruf sowie CSV-Import und -Validierung |
+| `htx_bot/strategy.py` | Simulations- und Backtestlogik |
+| `htx_bot/live.py` | Laufender Simulator und Telegram-Befehle |
+| `htx_bot/storage.py` | SQLite-Speicherung und Zustandsmigration |
+| `htx_bot/config.py` | Konfiguration und Validierung |
+| `htx_bot/cli.py` | Kommandozeilenschnittstelle |
+| `htx_bot/report.py` | Formatierung der Simulationsergebnisse |
+| `tests/` | Automatisierte Tests |
+| `deploy/` | systemd- und VPS-Dokumentation |
+| `scripts/` | Manuell auszuführende Synchronisationsskripte |
+
+## Installation und lokaler Start
+
+Voraussetzung ist Python 3.11 oder höher. Das Projekt verwendet ausschließlich die Python-Standardbibliothek.
 
 ```bash
-python3 -m htx_bot fetch --output data/ethusdt_1m.csv
+git clone https://github.com/nikolay-webdev/HTX.git
+cd HTX
+python3 --version
+```
+
+Historischen Backtest mit einer CSV-Datei ausführen:
+
+```bash
 python3 -m htx_bot backtest --input data/ethusdt_1m.csv
 ```
 
-Либо одним вызовом на последних данных HTX:
+Die letzten öffentlichen Candles laden und direkt simulieren:
 
 ```bash
 python3 -m htx_bot backtest --fetch --size 2000
 ```
 
-## Подключение Telegram и live-симулятора
+CSV-Dateien verwenden die Spalten `timestamp,open,high,low,close,volume`. Zeitstempel können in Sekunden oder als ISO-Datum vorliegen.
 
-### 1. Создать Telegram-бота
+## Telegram-Bot
 
-1. Откройте в Telegram официальный аккаунт `@BotFather`.
-2. Отправьте `/newbot` и выполните его инструкции.
-3. Скопируйте выданный токен. Токен равнозначен паролю от бота — не отправляйте его в чат и не добавляйте в Git.
+1. Über `@BotFather` einen Bot anlegen und den Token sicher aufbewahren.
+2. Lokale Konfiguration anlegen:
 
-### 2. Создать локальный `.env`
+   ```bash
+   cp .env.example .env
+   ```
 
-В корне проекта выполните:
+3. `TELEGRAM_BOT_TOKEN` in `.env` eintragen.
+4. Dem Bot `/start` senden und die Chat-ID ermitteln:
 
-```bash
-cp .env.example .env
-```
+   ```bash
+   python3 -m htx_bot telegram-info
+   ```
 
-Откройте `.env` и заполните только токен:
+5. `TELEGRAM_CHAT_ID` in `.env` eintragen und testen:
 
-```text
-TELEGRAM_BOT_TOKEN=токен_от_BotFather
-TELEGRAM_CHAT_ID=
-```
+   ```bash
+   python3 -m htx_bot telegram-test
+   ```
 
-Файл `.env` исключён из Git.
+6. Den Live-Dry-Run starten:
 
-### 3. Узнать `chat_id`
+   ```bash
+   python3 -m htx_bot live
+   ```
 
-Отправьте созданному боту сообщение `/start`, затем выполните:
+Der Token bleibt ausschließlich in `.env`; diese Datei ist durch `.gitignore` vom Repository ausgeschlossen.
 
-```bash
-python3 -m htx_bot telegram-info
-```
+### Verfügbare Befehle
 
-Команда напечатает значение вида `TELEGRAM_CHAT_ID=123456789`. Перенесите число в `.env`.
+| Befehl | Funktion |
+|---|---|
+| `/status` | Betriebszustand, letzte Marktdaten und offene Positionen |
+| `/position` | Details der offenen virtuellen Positionen |
+| `/current_market_price` | Zuletzt bekannte Marktpreis-Information |
+| `/stats` | Ergebnisse und statistische Kennzahlen |
+| `/pause` | Neue virtuelle Einstiege pausieren |
+| `/resume` | Analyse und neue Einstiege fortsetzen |
+| `/help` | Hilfe anzeigen |
 
-### 4. Проверить Telegram
+Befehle werden nur von der in `TELEGRAM_CHAT_ID` hinterlegten Chat-ID akzeptiert. Eine Pause beendet nicht die Überwachung bereits geöffneter Positionen.
 
-```bash
-python3 -m htx_bot telegram-test
-```
+## Datenverarbeitung und Simulation
 
-В Telegram должно прийти тестовое сообщение.
+Die Anwendung lädt öffentliche Marktdaten, validiert API-Antworten und verarbeitet abgeschlossene Candles. Die vorhandene Simulationslogik erkennt Einstiegssituationen, berechnet virtuelle Positionen und speichert Ergebnisse in SQLite. Der Live-Modus prüft den Markt regelmäßig und meldet Zustandsänderungen über Telegram.
 
-### 5. Запустить постоянный симулятор
-
-```bash
-python3 -m htx_bot live
-```
-
-Либо через VS Code:
-
-1. Откройте файл `start_simulator.py`.
-2. Нажмите кнопку `▶ Run Python File` в правом верхнем углу.
-3. Не закрывайте появившийся терминал, пока симулятор должен работать.
-
-Для остановки нажмите `Ctrl+C` в терминале VS Code.
-
-Остановка: `Ctrl+C`. Пока программа работает, домашний компьютер не должен переходить в сон.
-
-Состояние хранится в `data/eth_live_simulator.db`. После перезапуска открытая виртуальная позиция, статистика, пауза и Telegram offset восстанавливаются автоматически.
-
-### Telegram-команды
-
-- `/status` — режим, последняя цена, открытые позиции и суммарный текущий P&L;
-- `/position` — список открытых позиций, цены покупки, цели, текущий P&L и время удержания;
-- `/current_market_price` — текущая рыночная цена и время последней закрытой свечи;
-- `/stats` — завершённые сделки, прибыль и потенциал цены после входа;
-- `/pause` — запретить новые виртуальные покупки;
-- `/resume` — продолжить поиск входов;
-- `/help` — справка.
-
-Команды принимаются только из `TELEGRAM_CHAT_ID`. Пауза не мешает отслеживать продажу уже открытой позиции.
-
-### Уведомления
-
-Симулятор отправляет:
-
-- запуск и остановку;
-- виртуальную покупку с ценой, количеством и целью;
-- виртуальную продажу и чистую прибыль;
-- предупреждения при просадке −3%, −5%, −10% и −20%;
-- новую ошибку подключения или обработки;
-- ежедневный отчёт после 20:00 UTC.
-
-Ошибки с одинаковым текстом не дублируются на каждом цикле.
-
-Основные параметры:
-
-```bash
-python3 -m htx_bot backtest --fetch \
-  --capital 1800 \
-  --fee-rate 0.002 \
-  --target-price-delta 10 \
-  --min-net-profit-pct 0.0035 \
-  --lookback 90 \
-  --min-range-pct 0.008 \
-  --cooldown-candles 0
-```
-
-`fee-rate=0.002` означает 0,2% за одну операцию. `min-net-profit-pct=0.0035` требует не менее 0,35% чистой прибыли на рабочий капитал после обеих комиссий. Поэтому при ETH около 1736 USDT фактическая цель будет примерно на 13 USDT выше входа, а не на 10. Перед выводами ставку комиссии следует заменить фактической ставкой выбранной биржи.
-
-Для live-режима важны дополнительные параметры в `.env`:
-
-```env
-CAPITAL=1800
-MAX_OPEN_POSITIONS=2
-MIN_POSITION_DISTANCE_USDT=70
-REVERSAL_ENABLED=true
-REVERSAL_LOOKBACK=60
-REVERSAL_CONFIRMATION_CANDLES=15
-REVERSAL_DROP_PCT=0.004
-REVERSAL_REBOUND_PCT=0.0025
-REVERSAL_MAX_REBOUND_PCT=0.008
-REVERSAL_VOLUME_LOOKBACK=20
-REVERSAL_VOLUME_MULTIPLIER=2.0
-```
-
-`CAPITAL` — капитал на одну виртуальную позицию. При `MAX_OPEN_POSITIONS=2` общий виртуальный бюджет равен `3600 USDT`. Вторая покупка разрешается только при новом сигнале входа и если её цена минимум на `MIN_POSITION_DISTANCE_USDT` ниже самой дешёвой уже открытой позиции.
-
-`REVERSAL_ENABLED=true` добавляет вход после резкого падения на повышенном объёме и подтверждённого отскока. Такой вход сохраняется как `reversal_hold`: защитного стопа нет, а продажа происходит только по рассчитанной прибыльной цели. Старые `reversal`, которые действительно закрылись по цели, учитываются как подтверждённые прибыльные сделки безстоповой логики. В архиве остаются только фактические закрытия по старому защитному стопу.
-
-## Модель версии 0.3
-
-- до двух независимых виртуальных позиций;
-- рабочий капитал одной позиции по умолчанию 1800 USDT, общий виртуальный бюджет по умолчанию 3600 USDT;
-- если одна позиция открыта и цена ушла ниже, бот продолжает анализировать рынок и может открыть вторую позицию ниже;
-- вторая позиция открывается только при новом подтверждённом входе и достаточной дистанции от уже открытой позиции;
-- прибыль не реинвестируется;
-- первая загрузка только прогревает данные, затем бот ждёт минимум `LOOKBACK` закрытых свечей для анализа;
-- диапазон принимается только при достаточной ширине, слабом наклоне и повторных касаниях границ;
-- вход разрешён после зелёной свечи в нижней зоне диапазона и моделируется на следующем доступном open с заданным проскальзыванием;
-- после продажи рынок анализируется заново; немедленная повторная покупка не гарантируется;
-- цель продажи равна максимуму между `цена покупки + TARGET_PRICE_DELTA` и ценой, обеспечивающей `MIN_NET_PROFIT_PCT` после комиссий;
-- вход отменяется, если рассчитанная цель находится выше обнаруженного сопротивления;
-- продажа исполняется, когда `high` закрытой или текущей минутной свечи касается фиксированной цели;
-- учитываются комиссии покупки и продажи;
-- для новых сделок сохраняются максимум и минимум цены после входа, чтобы оценивать, доходила ли сделка до целей `+10`, `+15`, `+20`, `+25` USDT;
-- стоп-лосса нет ни у диапазонных входов, ни у `reversal_hold`;
-- это не бесконечное усреднение: лимит открытых позиций задаётся `MAX_OPEN_POSITIONS`;
-- открытая позиция в конце учитывается по рынку, а не считается безубыточной.
-
-### Статистика потенциала
-
-Команда `/stats` показывает не только закрытую прибыль, но и то, насколько цена реально уходила вверх и вниз после покупки:
-
-- средний максимум после покупки;
-- лучший максимум после покупки;
-- средняя и худшая просадка после покупки;
-- сколько закрытых сделок доходили до `+10`, `+15`, `+20`, `+25` USDT от цены входа;
-- предварительную рекомендацию по цели.
-
-Эта статистика нужна для следующего шага: выбирать цель продажи по фактическому поведению ETH, а не фиксировать вручную только `+10`. Если закрытых сделок меньше 10, рекомендация считается недостаточно надёжной.
-
-Это исследовательская модель, а не доказательство прибыльности. Свечи не содержат bid/ask, очередь лимитных ордеров и порядок сделок внутри минуты. Следующая точность достигается тестом по trade/order-book данным и live dry-run.
-
-При самом первом запуске live-режим прогревает историю и не создаёт сделку задним числом. На следующих закрытых свечах он анализирует диапазон и ждёт подтверждённую точку входа. Если программа была выключена с открытой виртуальной позицией, при запуске она проверяет доступные пропущенные свечи на касание цели.
-
-## CSV
-
-Поддерживаются столбцы:
-
-```text
-timestamp,open,high,low,close,volume
-```
-
-`timestamp` может быть Unix timestamp в секундах или ISO-датой. Строки сортируются по времени.
-
-## Проверка
+## Tests
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
 
-## VPS
+## Linux-VPS und systemd
 
-Инструкция по запуску через systemd и рабочему циклу деплоя находится в [`deploy/README.md`](deploy/README.md).
+Die Anwendung kann als systemd-Service dauerhaft auf einem Linux-VPS laufen. Unit-Datei, Konfigurationsvorlage und Betriebsdokumentation befinden sich in [`deploy/`](deploy/). Die produktive SQLite-Datenbank bleibt außerhalb von Git.
+
+Deployment-Skripte führen externe Änderungen aus und werden nicht automatisch gestartet. Vor einem Einsatz sind Zielhost, Pfade, Backups und Auswirkungen zu prüfen.
+
+## Sicherheit und Einschränkungen
+
+- Telegram-Token und VPS-Zugangsdaten gehören ausschließlich in lokale, ignorierte Konfigurationsdateien.
+- SQLite-Datenbanken, Backups und laufende Statistiken werden nicht in Git versioniert.
+- Neue Marktdaten hängen von der Verfügbarkeit der externen API ab.
+- Für Telegram-Funktionen ist ein gültiger Bot-Token erforderlich.
+- Für den kontinuierlichen Live-Modus muss der Prozess oder systemd-Service laufen.
+- Es werden keine echten Orders ausgeführt und keine API-Schlüssel für Handelszugriffe benötigt.
+
+## Mögliche Weiterentwicklung
+
+- Erweiterung der Testabdeckung für Konfigurations- und Fehlerfälle
+- strukturierteres Logging und bessere Diagnose im Dauerbetrieb
+- zusätzliche Resilienz bei externen API-Ausfällen
+- Überwachung von Prozesszustand und Datenaktualität
+
+## Portfolio-Kontext
+
+Dieses Repository ist ein technisches Lern- und Portfolio-Projekt. Der Schwerpunkt liegt auf modularer Python-Entwicklung, API-Integration, Persistenz, Testbarkeit und automatisiertem Betrieb.

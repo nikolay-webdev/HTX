@@ -1,4 +1,4 @@
-"""Запуск безопасного HTX live-симулятора кнопкой Run в VS Code."""
+"""Start the safe HTX live simulator with the Run button in VS Code."""
 
 from __future__ import annotations
 
@@ -20,9 +20,9 @@ def main() -> None:
     try:
         config = load_live_config(env_file)
     except (ValueError, OSError) as error:
-        print("Не удалось загрузить настройки симулятора.")
-        print(f"Причина: {error}")
-        print(f"Проверьте файл: {env_file}")
+        print("Die Simulator-Konfiguration konnte nicht geladen werden.")
+        print(f"Grund: {error}")
+        print(f"Bitte prüfen Sie die Datei: {env_file}")
         return
 
     storage = Storage(config.database_path)

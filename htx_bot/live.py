@@ -14,7 +14,7 @@ from .telegram import TelegramClient
 def _period_seconds(period: str) -> int:
     periods = {"1min": 60, "5min": 300, "15min": 900, "30min": 1800, "60min": 3600}
     if period not in periods:
-        raise ValueError(f"Live-режим пока не поддерживает период {period}")
+        raise ValueError(f"Der Live-Modus unterstützt den Zeitraum {period} derzeit nicht")
     return periods[period]
 
 
@@ -27,8 +27,8 @@ def _duration(seconds: int) -> str:
     days, minutes = divmod(minutes, 1440)
     hours, minutes = divmod(minutes, 60)
     if days:
-        return f"{days}д {hours}ч {minutes}м"
-    return f"{hours}ч {minutes}м"
+        return f"{days}T {hours}Std {minutes}Min"
+    return f"{hours}Std {minutes}Min"
 
 
 def _base_asset(symbol: str) -> str:
@@ -42,7 +42,7 @@ def _base_asset(symbol: str) -> str:
 def _target_recommendation(stats: dict[str, float | int]) -> str:
     count = int(stats["count"])
     if count < 10:
-        return "Данных мало: для выбора цели нужно хотя бы 10 закрытых сделок. Пока безопаснее тестировать +10/+12."
+        return "Zu wenige Daten: Für eine Zielauswahl werden mindestens 10 abgeschlossene Trades benötigt. Vorerst sind +10/+12 sicherer zu testen."
 
     levels = [
         (25, int(stats["reached_25"])),
@@ -53,8 +53,8 @@ def _target_recommendation(stats: dict[str, float | int]) -> str:
     for level, reached in levels:
         hit_rate = reached / count
         if hit_rate >= 0.6:
-            return f"По статистике можно тестировать цель около +{level} USDT: цена доходила туда в {hit_rate * 100:.0f}% сделок."
-    return "По статистике дальние цели пока слабые. Лучше оставаться на +10 и копить данные."
+            return f"Laut Statistik kann ein Ziel von etwa +{level} USDT getestet werden: Dieser Wert wurde in {hit_rate * 100:.0f}% der Trades erreicht."
+    return "Laut Statistik sind größere Ziele derzeit schwach. Besser bei +10 bleiben und weitere Daten sammeln."
 
 
 class LiveSimulator:
@@ -75,36 +75,36 @@ class LiveSimulator:
 
     def _state(self, paused: bool, positions: list[StoredPosition]) -> str:
         if paused:
-            return "ПАУЗА"
+            return "PAUSE"
         if len(positions) >= self.config.strategy.max_open_positions:
-            return "УДЕРЖАНИЕ"
+            return "HALTEN"
         if positions:
-            return "УДЕРЖАНИЕ + АНАЛИЗ"
-        return "АНАЛИЗ"
+            return "HALTEN + ANALYSE"
+        return "ANALYSE"
 
     def _position_block(self, position: StoredPosition, price: float, now: int, title: str | None = None) -> str:
         value = position.quantity * price * (1 - self.config.strategy.fee_rate)
         pnl = value - self.config.strategy.capital
         max_move = (position.max_price or position.entry_price) - position.entry_price
         min_move = (position.min_price or position.entry_price) - position.entry_price
-        header = title or f"📌 ПОЗИЦИЯ #{position.id}"
+        header = title or f"📌 POSITION #{position.id}"
         signal_name = (
-            "ложный пробой + удержание"
+            "Fehlausbruch + Halten"
             if position.entry_kind == "reversal_hold"
-            else "отскок в диапазоне"
+            else "Range-Rebound"
         )
         return (
             f"{header}\n"
-            f"Сигнал входа: {signal_name}\n"
-            f"Цена покупки: {position.entry_price:.4f} USDT\n"
-            f"Количество: {position.quantity:.6f} {self.base_asset}\n"
-            f"Текущая цена: {price:.4f} USDT\n"
-            f"Ожидаемая цена продажи: {position.target_price:.4f} USDT\n"
-            f"Осталось до цели: {position.target_price - price:+.4f} USDT\n"
-            f"Текущий P&L: {pnl:+.2f} USDT\n"
-            f"Максимум после входа: {(position.max_price or position.entry_price):.4f} USDT ({max_move:+.2f})\n"
-            f"Минимум после входа: {(position.min_price or position.entry_price):.4f} USDT ({min_move:+.2f})\n"
-            f"Удержание: {_duration(now - position.entry_time)}"
+            f"Einstiegssignal: {signal_name}\n"
+            f"Kaufpreis: {position.entry_price:.4f} USDT\n"
+            f"Menge: {position.quantity:.6f} {self.base_asset}\n"
+            f"Aktueller Preis: {price:.4f} USDT\n"
+            f"Erwarteter Verkaufspreis: {position.target_price:.4f} USDT\n"
+            f"Abstand zum Ziel: {position.target_price - price:+.4f} USDT\n"
+            f"Aktueller P&L: {pnl:+.2f} USDT\n"
+            f"Maximum nach Einstieg: {(position.max_price or position.entry_price):.4f} USDT ({max_move:+.2f})\n"
+            f"Minimum nach Einstieg: {(position.min_price or position.entry_price):.4f} USDT ({min_move:+.2f})\n"
+            f"Haltedauer: {_duration(now - position.entry_time)}"
         )
 
     def _can_open_new_position(self, entry_price: float, positions: list[StoredPosition]) -> tuple[bool, str]:
@@ -123,22 +123,22 @@ class LiveSimulator:
         positions = self.storage.positions()
         state = self._state(paused, positions)
         return (
-            "🧪 HTX СИМУЛЯТОР ЗАПУЩЕН\n\n"
-            f"Пара: {self.config.symbol.upper()}\n"
-            f"Общий виртуальный бюджет: {self.total_capital:.2f} USDT\n"
-            f"Капитал на одну позицию: {self.config.strategy.capital:.2f} USDT\n"
-            f"Максимум открытых позиций: {self.config.strategy.max_open_positions}\n"
-            f"Минимальная дистанция между входами: {self.config.strategy.min_position_distance_usdt:.2f} USDT\n"
-            f"Таймфрейм: {self.config.period}\n"
-            f"Цель продажи: цена покупки + {self.config.strategy.target_price_delta:.2f} USDT\n"
-            f"Проверка рынка: каждые {self.config.poll_seconds:g} сек.\n"
-            f"Комиссия: {self.config.strategy.fee_rate * 100:.3f}% за операцию\n"
-            f"Reversal без стопа: {'включён' if self.config.strategy.reversal_enabled else 'выключен'}\n"
-            f"Статус: {state}\n\n"
-            "Входы: отскок в диапазоне или объёмный ложный пробой с возвратом.\n"
-            "После покупки стопа нет: позиция удерживается до прибыльной цели.\n"
-            "Реальные ордера и HTX API-ключи не используются.\n"
-            "Команды: /status /position /current_market_price /stats /pause /resume /help"
+            "🧪 HTX-SIMULATOR GESTARTET\n\n"
+            f"Paar: {self.config.symbol.upper()}\n"
+            f"Virtuelles Gesamtbudget: {self.total_capital:.2f} USDT\n"
+            f"Kapital pro Position: {self.config.strategy.capital:.2f} USDT\n"
+            f"Maximale offene Positionen: {self.config.strategy.max_open_positions}\n"
+            f"Mindestabstand zwischen Einstiegen: {self.config.strategy.min_position_distance_usdt:.2f} USDT\n"
+            f"Zeitraum: {self.config.period}\n"
+            f"Verkaufsziel: Kaufpreis + {self.config.strategy.target_price_delta:.2f} USDT\n"
+            f"Marktprüfung: alle {self.config.poll_seconds:g} Sekunden\n"
+            f"Gebühr: {self.config.strategy.fee_rate * 100:.3f}% pro Vorgang\n"
+            f"Reversal ohne Stop-Loss: {'aktiviert' if self.config.strategy.reversal_enabled else 'deaktiviert'}\n"
+            f"Status: {state}\n\n"
+            "Einstiege: Range-Rebound oder volumenbestätigter Fehlausbruch mit Rückkehr.\n"
+            "Nach dem Kauf gibt es keinen Stop-Loss; die Position bleibt bis zum Gewinnziel geöffnet.\n"
+            "Es werden keine echten Orders und keine HTX-API-Schlüssel verwendet.\n"
+            "Befehle: /status /position /current_market_price /stats /pause /resume /help"
         )
 
     def status_text(self) -> str:
@@ -152,15 +152,15 @@ class LiveSimulator:
             for position in positions
         )
         text = (
-            "📊 СТАТУС\n\n"
-            f"Режим: SIMULATION\n"
-            f"Состояние: {state}\n"
-            f"Пара: {self.config.symbol.upper()}\n"
-            f"Последняя цена: {last_price:.4f} USDT\n"
-            f"Последняя закрытая свеча: {_time(last_candle) if last_candle else 'прогрев'}\n"
-            f"Открытые позиции: {len(positions)} / {self.config.strategy.max_open_positions}\n"
-            f"Задействованный капитал: {len(positions) * self.config.strategy.capital:.2f} / {self.total_capital:.2f} USDT\n"
-            f"Суммарный текущий P&L: {total_pnl:+.2f} USDT"
+            "📊 STATUS\n\n"
+            f"Modus: SIMULATION\n"
+            f"Zustand: {state}\n"
+            f"Paar: {self.config.symbol.upper()}\n"
+            f"Letzter Preis: {last_price:.4f} USDT\n"
+            f"Letzte abgeschlossene Candle: {_time(last_candle) if last_candle else 'Aufwärmphase'}\n"
+            f"Offene Positionen: {len(positions)} / {self.config.strategy.max_open_positions}\n"
+            f"Gebundenes Kapital: {len(positions) * self.config.strategy.capital:.2f} / {self.total_capital:.2f} USDT\n"
+            f"Aktueller Gesamt-P&L: {total_pnl:+.2f} USDT"
         )
         if not positions:
             return text
@@ -172,53 +172,53 @@ class LiveSimulator:
         last_price = float(self.storage.get("last_price", 0.0))
         last_candle = int(self.storage.get("last_candle_ts", 0))
         return (
-            "💵 ТЕКУЩАЯ РЫНОЧНАЯ ЦЕНА\n\n"
-            f"Пара: {self.config.symbol.upper()}\n"
-            f"Цена: {last_price:.4f} USDT\n"
-            f"Последняя закрытая свеча: {_time(last_candle) if last_candle else 'прогрев'}"
+            "💵 AKTUELLER MARKTPREIS\n\n"
+            f"Paar: {self.config.symbol.upper()}\n"
+            f"Preis: {last_price:.4f} USDT\n"
+            f"Letzte abgeschlossene Candle: {_time(last_candle) if last_candle else 'Aufwärmphase'}"
         )
 
     def position_text(self, now: int | None = None) -> str:
         positions = self.storage.positions()
         if not positions:
-            return "Открытой виртуальной позиции нет."
+            return "Keine offene virtuelle Position vorhanden."
         now = now or int(time.time())
         fallback = positions[0].entry_price
         price = float(self.storage.get("last_price", fallback))
         blocks = [self._position_block(position, price, now) for position in positions]
-        return "📌 ВИРТУАЛЬНЫЕ ПОЗИЦИИ\n\n" + "\n\n".join(blocks)
+        return "📌 VIRTUELLE POSITIONEN\n\n" + "\n\n".join(blocks)
 
     def stats_text(self) -> str:
         stats = self.storage.stats()
         count = max(1, int(stats["count"]))
         text = (
-            "📈 СТАТИСТИКА ТЕКУЩЕЙ СТРАТЕГИИ\n"
-            "Без стопов — позиции удерживаются до цели.\n\n"
-            f"Завершённых сделок: {stats['count']}\n"
-            f"Прибыльных: {stats['wins']}\n"
-            f"Реализованный P&L: {stats['profit']:.2f} USDT\n"
-            f"Средняя сделка: {stats['average']:.2f} USDT\n"
-            f"Сделки диапазона: {stats['range_count']}\n"
-            f"Reversal, закрытые по прибыльной цели: {stats['reversal_target_count']}\n"
-            f"Максимальная открытая просадка (вся история): {abs(float(self.storage.get('max_drawdown', 0.0))):.2f} USDT\n\n"
-            "Потенциал после входа:\n"
-            f"Средний максимум после покупки: +{stats['avg_max_move']:.2f} USDT\n"
-            f"Лучший максимум после покупки: +{stats['best_max_move']:.2f} USDT\n"
-            f"Средняя просадка после покупки: {stats['avg_min_move']:.2f} USDT\n"
-            f"Худшая просадка после покупки: {stats['worst_min_move']:.2f} USDT\n\n"
-            "Достижение целей по закрытым сделкам:\n"
-            f"+10 USDT: {stats['reached_10']} из {stats['count']} ({int(stats['reached_10']) / count * 100:.0f}%)\n"
-            f"+15 USDT: {stats['reached_15']} из {stats['count']} ({int(stats['reached_15']) / count * 100:.0f}%)\n"
-            f"+20 USDT: {stats['reached_20']} из {stats['count']} ({int(stats['reached_20']) / count * 100:.0f}%)\n"
-            f"+25 USDT: {stats['reached_25']} из {stats['count']} ({int(stats['reached_25']) / count * 100:.0f}%)\n\n"
-            f"Рекомендация: {_target_recommendation(stats)}"
+            "📈 STATISTIK DER AKTUELLEN STRATEGIE\n"
+            "Ohne Stop-Loss – Positionen bleiben bis zum Ziel geöffnet.\n\n"
+            f"Abgeschlossene Trades: {stats['count']}\n"
+            f"Gewinnbringende Trades: {stats['wins']}\n"
+            f"Realisierter P&L: {stats['profit']:.2f} USDT\n"
+            f"Durchschnittlicher Trade: {stats['average']:.2f} USDT\n"
+            f"Range-Trades: {stats['range_count']}\n"
+            f"Reversal-Trades mit Gewinnziel: {stats['reversal_target_count']}\n"
+            f"Maximaler historischer Drawdown: {abs(float(self.storage.get('max_drawdown', 0.0))):.2f} USDT\n\n"
+            "Potenzial nach dem Einstieg:\n"
+            f"Durchschnittliches Maximum nach Kauf: +{stats['avg_max_move']:.2f} USDT\n"
+            f"Bestes Maximum nach Kauf: +{stats['best_max_move']:.2f} USDT\n"
+            f"Durchschnittlicher Drawdown nach Kauf: {stats['avg_min_move']:.2f} USDT\n"
+            f"Schlechtester Drawdown nach Kauf: {stats['worst_min_move']:.2f} USDT\n\n"
+            "Erreichte Ziele bei abgeschlossenen Trades:\n"
+            f"+10 USDT: {stats['reached_10']} von {stats['count']} ({int(stats['reached_10']) / count * 100:.0f}%)\n"
+            f"+15 USDT: {stats['reached_15']} von {stats['count']} ({int(stats['reached_15']) / count * 100:.0f}%)\n"
+            f"+20 USDT: {stats['reached_20']} von {stats['count']} ({int(stats['reached_20']) / count * 100:.0f}%)\n"
+            f"+25 USDT: {stats['reached_25']} von {stats['count']} ({int(stats['reached_25']) / count * 100:.0f}%)\n\n"
+            f"Empfehlung: {_target_recommendation(stats)}"
         )
         if int(stats["archived_count"]):
             text += (
-                "\n\n🗄 АРХИВ СТАРЫХ СТОПОВ\n"
-                "Не учитывается в показателях безстоповой стратегии выше.\n"
-                f"Закрытий по стопу: {stats['archived_stops']}\n"
-                f"Зафиксированный тогда P&L: {stats['archived_profit']:.2f} USDT"
+                "\n\n🗄 ARCHIV ALTER STOP-LOSS-TRADES\n"
+                "In den Kennzahlen der Stop-Loss-freien Strategie oben nicht enthalten.\n"
+                f"Stop-Loss-Schließungen: {stats['archived_stops']}\n"
+                f"Damals fixierter P&L: {stats['archived_profit']:.2f} USDT"
             )
         return text
 
@@ -236,14 +236,14 @@ class LiveSimulator:
             command = text.split(maxsplit=1)[0].split("@", 1)[0].lower()
             if command in {"/start", "/help"}:
                 response = (
-                    "Команды симулятора:\n"
-                    "/status — состояние и цена\n"
-                    "/position — открытая позиция\n"
-                    "/current_market_price — текущая рыночная цена\n"
-                    "/stats — результаты\n"
-                    "/pause — запрет новых покупок\n"
-                    "/resume — продолжить поиск входа\n\n"
-                    "Пауза не отменяет виртуальную продажу уже открытой позиции."
+                    "Simulator-Befehle:\n"
+                    "/status — Zustand und Preis\n"
+                    "/position — offene Positionen\n"
+                    "/current_market_price — aktueller Marktpreis\n"
+                    "/stats — Ergebnisse\n"
+                    "/pause — neue Käufe pausieren\n"
+                    "/resume — Einstiegssuche fortsetzen\n\n"
+                    "Eine Pause beendet nicht den virtuellen Verkauf einer bereits offenen Position."
                 )
             elif command == "/status":
                 response = self.status_text()
@@ -255,12 +255,12 @@ class LiveSimulator:
                 response = self.stats_text()
             elif command == "/pause":
                 self.storage.set("paused", True)
-                response = "⏸ Новые виртуальные покупки приостановлены. Открытая позиция продолжает отслеживаться."
+                response = "⏸ Neue virtuelle Käufe wurden pausiert. Offene Positionen werden weiter überwacht."
             elif command == "/resume":
                 self.storage.set("paused", False)
-                response = "▶️ Анализ и поиск новых виртуальных покупок продолжены."
+                response = "▶️ Analyse und Suche nach neuen virtuellen Käufen wurden fortgesetzt."
             else:
-                response = "Неизвестная команда. Используйте /help."
+                response = "Unbekannter Befehl. Verwenden Sie /help."
             self.telegram.send(response)
 
     def _sell(self, position: StoredPosition, timestamp: int) -> None:
@@ -272,17 +272,17 @@ class LiveSimulator:
         self.storage.set("cooldown_until", cooldown_until)
         stats = self.storage.stats()
         self._send(
-            "✅ ВИРТУАЛЬНАЯ ПРОДАЖА\n\n"
-            f"Позиция: #{position.id}\n"
-            f"Время: {_time(timestamp)}\n"
-            f"Покупка: {position.entry_price:.4f} USDT\n"
-            f"Продажа: {position.target_price:.4f} USDT\n"
-            f"Разница цены: +{position.target_price - position.entry_price:.2f} USDT\n"
-            f"Количество: {position.quantity:.6f} {self.base_asset}\n"
-            f"Комиссия продажи: {sell_fee:.2f} USDT\n"
-            f"Чистая прибыль: {net:+.2f} USDT\n"
-            f"Накопленная прибыль: {stats['profit']:.2f} USDT\n"
-            f"Удержание: {_duration(timestamp - position.entry_time)}",
+            "✅ VIRTUELLER VERKAUF\n\n"
+            f"Position: #{position.id}\n"
+            f"Zeit: {_time(timestamp)}\n"
+            f"Kauf: {position.entry_price:.4f} USDT\n"
+            f"Verkauf: {position.target_price:.4f} USDT\n"
+            f"Preisunterschied: +{position.target_price - position.entry_price:.2f} USDT\n"
+            f"Menge: {position.quantity:.6f} {self.base_asset}\n"
+            f"Verkaufsgebühr: {sell_fee:.2f} USDT\n"
+            f"Nettogewinn: {net:+.2f} USDT\n"
+            f"Kumulativer Gewinn: {stats['profit']:.2f} USDT\n"
+            f"Haltedauer: {_duration(timestamp - position.entry_time)}",
             "sell",
         )
 
@@ -297,14 +297,14 @@ class LiveSimulator:
         level = min(crossed)
         self.storage.set_alert_level(position.id, level)
         self._send(
-            "⚠️ ВИРТУАЛЬНАЯ ПОЗИЦИЯ В ПРОСАДКЕ\n\n"
-            f"Позиция: #{position.id}\n"
-            f"Покупка: {position.entry_price:.4f} USDT\n"
-            f"Текущая цена: {price:.4f} USDT\n"
-            f"Просадка цены: {drawdown_pct * 100:.2f}%\n"
-            f"Текущий P&L: {pnl:+.2f} USDT\n"
-            f"Цель продажи не изменена: {position.target_price:.4f} USDT\n"
-            f"Удержание: {_duration(timestamp - position.entry_time)}",
+            "⚠️ VIRTUELLE POSITION IM DRAWDOWN\n\n"
+            f"Position: #{position.id}\n"
+            f"Kauf: {position.entry_price:.4f} USDT\n"
+            f"Aktueller Preis: {price:.4f} USDT\n"
+            f"Preisrückgang: {drawdown_pct * 100:.2f}%\n"
+            f"Aktueller P&L: {pnl:+.2f} USDT\n"
+            f"Verkaufsziel unverändert: {position.target_price:.4f} USDT\n"
+            f"Haltedauer: {_duration(timestamp - position.entry_time)}",
             "drawdown",
         )
 
@@ -322,13 +322,13 @@ class LiveSimulator:
 
     def process_market(self, candles: list[Candle], now: int | None = None) -> str:
         if not candles:
-            raise ValueError("HTX не вернул свечи")
+            raise ValueError("HTX hat keine Candles zurückgegeben")
         now = now or int(time.time())
         candles = sorted(candles, key=lambda candle: candle.timestamp)
         cutoff = now // self.period_seconds * self.period_seconds
         closed = [candle for candle in candles if candle.timestamp < cutoff]
         if not closed:
-            raise ValueError("Нет закрытых свечей")
+            raise ValueError("Keine abgeschlossenen Candles vorhanden")
         self.storage.set("last_price", candles[-1].close)
 
         last_processed = self.storage.get("last_candle_ts")
@@ -347,11 +347,11 @@ class LiveSimulator:
             gap_key = f"{last_processed}:{closed[0].timestamp}"
             if self.storage.get("last_gap_notice") != gap_key:
                 self._send(
-                    "⚠️ ПРОПУСК В ИСТОРИИ\n\n"
-                    "Компьютер был выключен дольше доступной истории HTX. "
-                    "Момент виртуального исполнения внутри пропуска нельзя восстановить точно.\n"
-                    f"Последняя сохранённая свеча: {_time(int(last_processed))}\n"
-                    f"Первая доступная свеча: {_time(closed[0].timestamp)}",
+                    "⚠️ LÜCKE IN DER HISTORIE\n\n"
+                    "Der Computer war länger ausgeschaltet als die bei HTX verfügbare Historie. "
+                    "Der virtuelle Ausführungszeitpunkt innerhalb der Lücke kann nicht exakt rekonstruiert werden.\n"
+                    f"Letzte gespeicherte Candle: {_time(int(last_processed))}\n"
+                    f"Erste verfügbare Candle: {_time(closed[0].timestamp)}",
                     "data_gap",
                 )
                 self.storage.set("last_gap_notice", gap_key)
@@ -410,35 +410,35 @@ class LiveSimulator:
         position = self.storage.open_position(position)
         expected_proceeds = quantity * target * (1 - self.config.strategy.fee_rate)
         signal_name = (
-            "ложный пробой + возврат без стопа"
+            "Fehlausbruch + Rückkehr ohne Stop-Loss"
             if setup.kind == "reversal_hold"
-            else "отскок в диапазоне"
+            else "Range-Rebound"
         )
         setup_lines = (
-            f"Минимум ложного пробоя: {setup.support:.4f} USDT\n"
-            f"Максимум перед падением: {setup.resistance:.4f} USDT\n"
+            f"Minimum des Fehlausbruchs: {setup.support:.4f} USDT\n"
+            f"Maximum vor dem Rückgang: {setup.resistance:.4f} USDT\n"
             if setup.kind == "reversal_hold"
             else (
-                f"Поддержка диапазона: {setup.support:.4f} USDT\n"
-                f"Сопротивление диапазона: {setup.resistance:.4f} USDT\n"
+                f"Range-Unterstützung: {setup.support:.4f} USDT\n"
+                f"Range-Widerstand: {setup.resistance:.4f} USDT\n"
             )
         )
         self._send(
-            "🟢 ВИРТУАЛЬНАЯ ПОКУПКА\n\n"
-            f"Позиция: #{position.id}\n"
-            f"Время: {_time(position.entry_time)}\n"
-            f"Сигнал: {signal_name}\n"
-            f"Цена: {entry_price:.4f} USDT\n"
-            f"Количество: {quantity:.6f} {self.base_asset}\n"
-            f"Рабочий капитал: {self.config.strategy.capital:.2f} USDT\n"
-            f"Комиссия покупки: {buy_fee:.2f} USDT\n\n"
+            "🟢 VIRTUELLER KAUF\n\n"
+            f"Position: #{position.id}\n"
+            f"Zeit: {_time(position.entry_time)}\n"
+            f"Signal: {signal_name}\n"
+            f"Preis: {entry_price:.4f} USDT\n"
+            f"Menge: {quantity:.6f} {self.base_asset}\n"
+            f"Arbeitskapital: {self.config.strategy.capital:.2f} USDT\n"
+            f"Kaufgebühr: {buy_fee:.2f} USDT\n\n"
             f"{setup_lines}"
-            f"Открытые позиции после покупки: {len(self.storage.positions())} / {self.config.strategy.max_open_positions}\n"
-            f"Виртуальная продажа: {target:.4f} USDT (+{target - entry_price:.2f})\n"
-            f"Ожидаемая валовая прибыль от движения цены: {quantity * (target - entry_price):.2f} USDT\n"
-            f"Ожидаемая чистая прибыль: {expected_proceeds - self.config.strategy.capital:.2f} USDT\n\n"
-            "Стоп-лосса нет. Если цена снизится, позиция останется открытой "
-            "до восстановления и достижения прибыльной цели.",
+            f"Offene Positionen nach dem Kauf: {len(self.storage.positions())} / {self.config.strategy.max_open_positions}\n"
+            f"Virtueller Verkauf: {target:.4f} USDT (+{target - entry_price:.2f})\n"
+            f"Erwarteter Bruttogewinn aus der Preisbewegung: {quantity * (target - entry_price):.2f} USDT\n"
+            f"Erwarteter Nettogewinn: {expected_proceeds - self.config.strategy.capital:.2f} USDT\n\n"
+            "Kein Stop-Loss. Wenn der Preis fällt, bleibt die Position bis zur Erholung "
+            "und zum Erreichen des Gewinnziels geöffnet.",
             "buy",
         )
         return "bought"
@@ -451,7 +451,7 @@ class LiveSimulator:
         hour = datetime.fromtimestamp(now, tz=timezone.utc).hour
         if hour < 20:
             return
-        self._send("🗓 ЕЖЕДНЕВНЫЙ ОТЧЁТ\n\n" + self.stats_text() + "\n\n" + self.position_text(now), "daily")
+        self._send("🗓 TAGESBERICHT\n\n" + self.stats_text() + "\n\n" + self.position_text(now), "daily")
         self.storage.set("daily_report_date", date)
 
     def run(self) -> None:
@@ -490,7 +490,7 @@ class LiveSimulator:
                     message = f"{type(error).__name__}: {error}"
                     if self.storage.get("last_market_error") != message:
                         try:
-                            self._send("🔴 ОШИБКА СИМУЛЯТОРА\n\n" + message, "error")
+                            self._send("🔴 SIMULATORFEHLER\n\n" + message, "error")
                         except Exception:
                             pass
                         self.storage.set("last_market_error", message)
@@ -498,6 +498,6 @@ class LiveSimulator:
                 time.sleep(self.config.poll_seconds)
         except KeyboardInterrupt:
             try:
-                self._send("⏹ HTX симулятор остановлен с компьютера.", "stop")
+                self._send("⏹ HTX-Simulator wurde lokal beendet.", "stop")
             finally:
                 print("Simulator stopped.")

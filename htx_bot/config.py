@@ -38,7 +38,7 @@ def _bool(name: str, default: bool) -> bool:
         return True
     if normalized in {"0", "false", "no", "off"}:
         return False
-    raise ValueError(f"{name} должен быть true/false")
+    raise ValueError(f"{name} muss true oder false sein")
 
 
 @dataclass(frozen=True)
@@ -57,9 +57,9 @@ def load_live_config(env_file: str | Path = ".env") -> LiveConfig:
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
     if not token:
-        raise ValueError("В .env не задан TELEGRAM_BOT_TOKEN")
+        raise ValueError("TELEGRAM_BOT_TOKEN ist in .env nicht gesetzt")
     if not chat_id:
-        raise ValueError("В .env не задан TELEGRAM_CHAT_ID")
+        raise ValueError("TELEGRAM_CHAT_ID ist in .env nicht gesetzt")
 
     strategy = StrategyConfig(
         capital=_float("CAPITAL", 1800.0),
@@ -86,36 +86,36 @@ def load_live_config(env_file: str | Path = ".env") -> LiveConfig:
         reversal_volume_multiplier=_float("REVERSAL_VOLUME_MULTIPLIER", 2.0),
     )
     if strategy.capital <= 0:
-        raise ValueError("CAPITAL должен быть больше нуля")
+        raise ValueError("CAPITAL muss größer als null sein")
     if strategy.max_open_positions < 1:
-        raise ValueError("MAX_OPEN_POSITIONS должен быть не меньше 1")
+        raise ValueError("MAX_OPEN_POSITIONS muss mindestens 1 sein")
     if strategy.min_position_distance_usdt < 0:
-        raise ValueError("MIN_POSITION_DISTANCE_USDT не должен быть отрицательным")
+        raise ValueError("MIN_POSITION_DISTANCE_USDT darf nicht negativ sein")
     if not 0 <= strategy.fee_rate < 0.1:
-        raise ValueError("FEE_RATE должен быть от 0 до 0.1")
+        raise ValueError("FEE_RATE muss zwischen 0 und 0.1 liegen")
     if strategy.target_price_delta <= 0:
-        raise ValueError("TARGET_PRICE_DELTA должен быть больше нуля")
+        raise ValueError("TARGET_PRICE_DELTA muss größer als null sein")
     if strategy.lookback < 20:
-        raise ValueError("LOOKBACK должен быть не меньше 20")
+        raise ValueError("LOOKBACK muss mindestens 20 sein")
     if not 0 < strategy.entry_zone < strategy.exit_zone < 1:
-        raise ValueError("Должно выполняться 0 < ENTRY_ZONE < EXIT_ZONE < 1")
+        raise ValueError("Es muss 0 < ENTRY_ZONE < EXIT_ZONE < 1 gelten")
     if strategy.reversal_lookback < 20:
-        raise ValueError("REVERSAL_LOOKBACK должен быть не меньше 20")
+        raise ValueError("REVERSAL_LOOKBACK muss mindestens 20 sein")
     if not 1 <= strategy.reversal_confirmation_candles < strategy.reversal_lookback:
-        raise ValueError("REVERSAL_CONFIRMATION_CANDLES должен быть меньше REVERSAL_LOOKBACK")
+        raise ValueError("REVERSAL_CONFIRMATION_CANDLES muss kleiner als REVERSAL_LOOKBACK sein")
     if not 0 < strategy.reversal_drop_pct < 0.1:
-        raise ValueError("REVERSAL_DROP_PCT должен быть от 0 до 0.1")
+        raise ValueError("REVERSAL_DROP_PCT muss zwischen 0 und 0.1 liegen")
     if not 0 < strategy.reversal_rebound_pct < strategy.reversal_max_rebound_pct < 0.1:
         raise ValueError(
-            "Должно выполняться 0 < REVERSAL_REBOUND_PCT < REVERSAL_MAX_REBOUND_PCT < 0.1"
+            "Es muss 0 < REVERSAL_REBOUND_PCT < REVERSAL_MAX_REBOUND_PCT < 0.1 gelten"
         )
     if not 2 <= strategy.reversal_volume_lookback < strategy.reversal_lookback:
-        raise ValueError("REVERSAL_VOLUME_LOOKBACK должен быть меньше REVERSAL_LOOKBACK")
+        raise ValueError("REVERSAL_VOLUME_LOOKBACK muss kleiner als REVERSAL_LOOKBACK sein")
     if strategy.reversal_volume_multiplier <= 1:
-        raise ValueError("REVERSAL_VOLUME_MULTIPLIER должен быть больше 1")
+        raise ValueError("REVERSAL_VOLUME_MULTIPLIER muss größer als 1 sein")
     poll_seconds = _float("POLL_SECONDS", 10.0)
     if poll_seconds < 5:
-        raise ValueError("POLL_SECONDS не должен быть меньше 5 секунд")
+        raise ValueError("POLL_SECONDS darf nicht kleiner als 5 Sekunden sein")
     return LiveConfig(
         telegram_token=token,
         telegram_chat_id=int(chat_id),

@@ -223,7 +223,7 @@ class Storage:
         with self.connection:
             row = self.connection.execute("SELECT * FROM position WHERE id = ?", (position_id,)).fetchone()
             if row is None:
-                raise RuntimeError("Нет открытой позиции")
+                raise RuntimeError("Keine offene Position vorhanden")
             self.connection.execute(
                 """INSERT INTO trades(
                     entry_time, exit_time, entry_price, exit_price, quantity,

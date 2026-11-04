@@ -34,16 +34,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="ETH/USDT spot range strategy simulator")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    fetch = subparsers.add_parser("fetch", help="Загрузить последние свечи HTX в CSV")
+    fetch = subparsers.add_parser("fetch", help="Letzte HTX-Candles in eine CSV-Datei laden")
     fetch.add_argument("--symbol", default="ethusdt")
     fetch.add_argument("--period", default="1min")
     fetch.add_argument("--size", type=int, default=2000)
     fetch.add_argument("--output", required=True)
 
-    backtest = subparsers.add_parser("backtest", help="Запустить симуляцию")
+    backtest = subparsers.add_parser("backtest", help="Simulation ausführen")
     source = backtest.add_mutually_exclusive_group(required=True)
-    source.add_argument("--input", help="CSV со свечами")
-    source.add_argument("--fetch", action="store_true", help="Взять последние свечи с HTX")
+    source.add_argument("--input", help="CSV-Datei mit Candles")
+    source.add_argument("--fetch", action="store_true", help="Letzte Candles von HTX laden")
     backtest.add_argument("--symbol", default="ethusdt")
     backtest.add_argument("--period", default="1min")
     backtest.add_argument("--size", type=int, default=2000)
@@ -60,15 +60,15 @@ def build_parser() -> argparse.ArgumentParser:
     backtest.add_argument("--min-net-profit-pct", type=float, default=0.0035)
     backtest.add_argument("--cooldown-candles", type=int, default=0)
 
-    live = subparsers.add_parser("live", help="Запустить постоянный dry-run с Telegram")
-    live.add_argument("--env", default=".env", help="Путь к файлу настроек")
+    live = subparsers.add_parser("live", help="Kontinuierlichen Dry-Run mit Telegram starten")
+    live.add_argument("--env", default=".env", help="Pfad zur Konfigurationsdatei")
 
     telegram_info = subparsers.add_parser(
-        "telegram-info", help="Проверить токен и найти chat_id после сообщения боту"
+        "telegram-info", help="Token prüfen und chat_id nach einer Bot-Nachricht ermitteln"
     )
     telegram_info.add_argument("--env", default=".env")
 
-    telegram_test = subparsers.add_parser("telegram-test", help="Отправить тестовое сообщение")
+    telegram_test = subparsers.add_parser("telegram-test", help="Testnachricht senden")
     telegram_test.add_argument("--env", default=".env")
     return parser
 
@@ -78,14 +78,14 @@ def main() -> None:
     if args.command == "fetch":
         candles = fetch_htx_candles(args.symbol, args.period, args.size)
         write_csv(candles, args.output)
-        print(f"Сохранено свечей: {len(candles)} -> {args.output}")
+        print(f"Gespeicherte Candles: {len(candles)} -> {args.output}")
         return
 
     if args.command == "telegram-info":
         load_dotenv(args.env)
         token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
         if not token:
-            raise SystemExit("В .env не задан TELEGRAM_BOT_TOKEN")
+            raise SystemExit("TELEGRAM_BOT_TOKEN ist in .env nicht gesetzt")
         telegram = TelegramClient(token, 0)
         bot = telegram.check()
         updates = telegram.updates()
@@ -94,12 +94,12 @@ def main() -> None:
             for update in updates
             if update.get("message", {}).get("chat", {}).get("id") is not None
         }
-        print(f"Бот: @{bot.get('username', 'unknown')}")
+        print(f"Bot: @{bot.get('username', 'unknown')}")
         if chats:
             for chat_id, chat_type in chats.items():
                 print(f"TELEGRAM_CHAT_ID={chat_id} ({chat_type})")
         else:
-            print("Сообщений нет. Отправьте боту /start и повторите команду.")
+            print("Keine Nachrichten gefunden. Senden Sie dem Bot /start und wiederholen Sie den Befehl.")
         return
 
     if args.command in {"telegram-test", "live"}:
@@ -107,8 +107,8 @@ def main() -> None:
         telegram = TelegramClient(config.telegram_token, config.telegram_chat_id)
         if args.command == "telegram-test":
             bot = telegram.check()
-            telegram.send("✅ Telegram подключён к безопасному HTX-симулятору.")
-            print(f"Сообщение отправлено через @{bot.get('username', 'unknown')}")
+            telegram.send("✅ Telegram ist mit dem sicheren HTX-Simulator verbunden.")
+            print(f"Nachricht über @{bot.get('username', 'unknown')} gesendet")
             return
         storage = Storage(config.database_path)
         try:

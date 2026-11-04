@@ -8,7 +8,7 @@ from .models import BacktestResult, Candle, Position, StrategyConfig, Trade
 def percentile(values: list[float], fraction: float) -> float:
     ordered = sorted(values)
     if not ordered:
-        raise ValueError("Нельзя вычислить процентиль пустого списка")
+        raise ValueError("Ein Perzentil kann für eine leere Liste nicht berechnet werden")
     position = (len(ordered) - 1) * fraction
     lower = int(position)
     upper = min(lower + 1, len(ordered) - 1)
@@ -180,7 +180,7 @@ def detect_entry_setup(
 
 def run_backtest(candles: list[Candle], config: StrategyConfig) -> BacktestResult:
     if len(candles) < 2:
-        raise ValueError("Нужно не меньше двух свечей")
+        raise ValueError("Es werden mindestens zwei Candles benötigt")
     candles = sorted(candles, key=lambda candle: candle.timestamp)
 
     trades: list[Trade] = []

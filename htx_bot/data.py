@@ -33,7 +33,7 @@ def _ssl_context() -> ssl.SSLContext:
 
 def fetch_htx_candles(symbol: str = "ethusdt", period: str = "1min", size: int = 2000) -> list[Candle]:
     if not 1 <= size <= 2000:
-        raise ValueError("HTX size должен быть от 1 до 2000")
+        raise ValueError("HTX size muss zwischen 1 und 2000 liegen")
     query = urlencode({"symbol": symbol.lower(), "period": period, "size": size})
     payload = None
     last_error: URLError | None = None
@@ -91,7 +91,7 @@ def read_csv(path: str | Path) -> list[Candle]:
         reader = csv.DictReader(handle)
         required = {"timestamp", "open", "high", "low", "close", "volume"}
         if not reader.fieldnames or not required.issubset(reader.fieldnames):
-            raise ValueError(f"CSV должен содержать столбцы: {', '.join(sorted(required))}")
+            raise ValueError(f"CSV muss folgende Spalten enthalten: {', '.join(sorted(required))}")
         candles = [
             Candle(
                 timestamp=_parse_timestamp(row["timestamp"]),
